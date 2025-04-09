@@ -4,44 +4,89 @@ import bluetooth
 import json
 import os
 import binascii
+
 from typing import Dict, List
 from micropython import const
-from usb.device import keyboard as usb_keyboard
-from usb.device import hid as usb_hid
+from usb.device.keyboard import KeyCode
 
-class BluetoothKeyboard:
+
+_KEYBOARD_REPORT_DESC = (
+    b'\x05\x01'     # Usage Page (Generic Desktop),
+        b'\x09\x06'     # Usage (Keyboard),
+    b'\xA1\x01'     # Collection (Application),
+        b'\x05\x07'         # Usage Page (Key Codes);
+            b'\x19\xE0'         # Usage Minimum (224),
+            b'\x29\xE7'         # Usage Maximum (231),
+            b'\x15\x00'         # Logical Minimum (0),
+            b'\x25\x01'         # Logical Maximum (1),
+            b'\x75\x01'         # Report Size (1),
+            b'\x95\x08'         # Report Count (8),
+            b'\x81\x02'         # Input (Data, Variable, Absolute), ;Modifier byte
+            b'\x95\x01'         # Report Count (1),
+            b'\x75\x08'         # Report Size (8),
+            b'\x81\x01'         # Input (Constant), ;Reserved byte
+            b'\x95\x05'         # Report Count (5),
+            b'\x75\x01'         # Report Size (1),
+        b'\x05\x08'         # Usage Page (Page# for LEDs),
+            b'\x19\x01'         # Usage Minimum (1),
+            b'\x29\x05'         # Usage Maximum (5),
+            b'\x91\x02'         # Output (Data, Variable, Absolute), ;LED report
+            b'\x95\x01'         # Report Count (1),
+            b'\x75\x03'         # Report Size (3),
+            b'\x91\x01'         # Output (Constant), ;LED report padding
+            b'\x95\x06'         # Report Count (6),
+            b'\x75\x08'         # Report Size (8),
+            b'\x15\x00'         # Logical Minimum (0),
+            b'\x25\x65'         # Logical Maximum(101),
+        b'\x05\x07'         # Usage Page (Key Codes),
+            b'\x19\x00'         # Usage Minimum (0),
+            b'\x29\x65'         # Usage Maximum (101),
+            b'\x81\x00'         # Input (Data, Array), ;Key arrays (6 bytes)
+    b'\xC0'     # End Collection
+)
+
+
+class BluetoothKeyboard(object):
     """A Bluetooth HID keyboard implementation."""
+    def __init__(
+            self,
+            device_name: str = "MicroKeyBoard",
+            paired_deivces_path: str = "paired_devices.json",
+        ):
+        self.device_name = device_name
+        self.paired_deivces_path = paired_deivces_path
 
-    # Bluetooth event constants
-    IRQ_CENTRAL_CONNECT = const(1)
-    IRQ_CENTRAL_DISCONNECT = const(2)
-    IRQ_GATTS_WRITE = const(3)
-    IRQ_GATTS_READ_REQUEST = const(4)
-    IRQ_MTU_EXCHANGED = const(21)
-    IRQ_CONNECTION_UPDATE = const(27)
-    IRQ_ENCRYPTION_UPDATE = const(28)
-    IRQ_GET_SECRET = const(29)
-    IRQ_SET_SECRET = const(30)
+        self.paired_device_keys = self._load_paired_device()
+        self.ble = bluetooth.BLE()
 
-    # File for storing paired devices
-    PAIRED_DEVICES_FILE = "paired_devices.json"
-
-    # IO capability configuration for security mode
-    IO_CAPABILITY_DISPLAY_ONLY = const(0)
-
-    def __init__(self):
         self.conn_handle = None
         self.report_handle = None
         self.cccd_handle = None
         self.notifications_enabled = False
-        self.paired_device_keys = self._load_paired_device()
-        self.ble = bluetooth.BLE()
+
+        # Bluetooth event constants
+        self._IRQ_CENTRAL_CONNECT = const(1)
+        self._IRQ_CENTRAL_DISCONNECT = const(2)
+        self._IRQ_GATTS_WRITE = const(3)
+        self._IRQ_GATTS_READ_REQUEST = const(4)
+        self._IRQ_MTU_EXCHANGED = const(21)
+        self._IRQ_CONNECTION_UPDATE = const(27)
+        self._IRQ_ENCRYPTION_UPDATE = const(28)
+        self._IRQ_GET_SECRET = const(29)
+        self._IRQ_SET_SECRET = const(30)
 
         self._FLAG_READ = const(0x0002)
         self._FLAG_WRITE_NO_RESPONSE = const(0x0004)
         self._FLAG_WRITE = const(0x0008)
         self._FLAG_NOTIFY = const(0x0010)
         self._FLAG_READ_WRITE = self._FLAG_READ | self._FLAG_WRITE
+
+        # IO capability configuration for security mode
+        self._IO_CAPABILITY_DISPLAY_ONLY = const(0)
+        # self._IO_CAPABILITY_DISPLAY_YESNO = const(1)
+        # self._IO_CAPABILITY_KEYBOARD_ONLY = const(2)
+        # self._IO_CAPABILITY_NO_INPUT_OUTPUT = const(3)
+        # self._IO_CAPABILITY_KEYBOARD_DISPLAY = const(4)
 
         self._HID_SERVICE_UUID = bluetooth.UUID(0x1812)
         self._HID_REPORT_MAP_UUID = bluetooth.UUID(0x2A4B)
@@ -50,6 +95,9 @@ class BluetoothKeyboard:
         self._HID_INPUT_REPORT_UUID = bluetooth.UUID(0x2A4D)
         self._CCC_DESCRIPTOR_UUID = bluetooth.UUID(0x2902)
         self._REPORT_REF_DESCRIPTOR_UUID = bluetooth.UUID(0x2908)
+
+        self._KEY_ARRAY_LEN = const(6)  # Size of HID key array, must match report descriptor
+        self._KEY_REPORT_LEN = const(self._KEY_ARRAY_LEN + 2)  # Modifier Byte + Reserved Byte + Array entries
 
     def exists(self, path: str) -> bool:
         try: os.stat(path); return True
@@ -76,16 +124,16 @@ class BluetoothKeyboard:
                 [sec_type, binascii.b2a_base64(key).decode(), binascii.b2a_base64(value).decode()]
                 for (sec_type, key), value in self.paired_device_keys.items()
             ]
-            with open(self.PAIRED_DEVICES_FILE, 'w') as f: json.dump(paired_device_data, f)
+            with open(self.paired_deivces_path, 'w') as f: json.dump(paired_device_data, f)
             os.sync()
             print("Paired devices saved.")
         except Exception as e: print("Failed to save paired devices:", e)
 
     def _load_paired_device(self) -> Dict:
-        if not self.exists(self.PAIRED_DEVICES_FILE): return {}
+        if not self.exists(self.paired_deivces_path): return {}
         try:
             keys_dict = {}
-            with open(self.PAIRED_DEVICES_FILE, 'r') as f: paired_device_data = json.load(f)
+            with open(self.paired_deivces_path, 'r') as f: paired_device_data = json.load(f)
             print("Loaded paired devices.")
             for sec_type, key, value in paired_device_data:
                 keys_dict[(sec_type, binascii.a2b_base64(key))] = binascii.a2b_base64(value)
@@ -93,14 +141,12 @@ class BluetoothKeyboard:
         except Exception as e: print("Failed to load paired devices:", e); return {}
 
     def clear_paired_devices(self) -> None:
-        try: os.remove(self.PAIRED_DEVICES_FILE); print("Cleared all paired device records.")
+        try: os.remove(self.paired_deivces_path); print("Cleared all paired device records.")
         except OSError: print("No paired device records to clear.")
 
-    def send_hid_report(self, modifier, keycode):
-        """Sends a HID keyboard report."""
+    def send_report(self, report: bytes):
         if self.conn_handle is None or self.report_handle is None:
             return False
-        report = struct.pack('BB6B', modifier, 0, keycode, 0, 0, 0, 0, 0)
         try:
             self.ble.gatts_notify(self.conn_handle, self.report_handle, report)
             return True
@@ -109,26 +155,29 @@ class BluetoothKeyboard:
             self.conn_handle = None
             return False
 
-    def send_m_key(self):
-        """Sends a press and release sequence for the 'm' key."""
-        print("Attempting 'm' key sequence...")
-        if self.send_hid_report(0, usb_keyboard.KeyCode.M):
-            time.sleep_ms(50)
-            if self.send_hid_report(0, 0):
-                print("'m' key sequence sent successfully.")
+    def send_keys(self, down_keys):
+        """Sends a HID keyboard report."""
+        modifiers, keycodes = 0, []
+        for k in down_keys:
+            if k < 0:  # Modifier key
+                modifiers |= -k
+            elif len(keycodes) < self._KEY_ARRAY_LEN:
+                keycodes.append(k)
             else:
-                print("Failed to send key release.")
-        else:
-            print("Failed to send key press.")
+                modifiers = 0
+                keycodes = []
+                break
+        keycodes = keycodes + [0] * (self._KEY_ARRAY_LEN - len(keycodes))
+        report = struct.pack('BB6B', modifiers, 0, *keycodes)
+        return self.send_report(report)
 
     def _ble_irq(self, event: int, data: tuple) -> None:
         """Handles BLE IRQ events."""
-        if event == self.IRQ_CENTRAL_CONNECT:
+        if event == self._IRQ_CENTRAL_CONNECT:
             self.conn_handle, addr_type, addr = data
             self.notifications_enabled = False
             print("[Connect] Connected to:", binascii.hexlify(addr).decode())
-
-        elif event == self.IRQ_CENTRAL_DISCONNECT:
+        elif event == self._IRQ_CENTRAL_DISCONNECT:
             conn_handle_old, addr_type, addr = data
             print("[Disconnect] Disconnected from:", binascii.hexlify(addr).decode())
             self.conn_handle = None
@@ -136,10 +185,9 @@ class BluetoothKeyboard:
             self.ble.gap_advertise(None)
             time.sleep_ms(200)
             self._start_advertising()
-
-        elif event == self.IRQ_GATTS_WRITE:
+        elif event == self._IRQ_GATTS_WRITE:
             conn_handle_write, attr_handle = data
-            print(f"IRQ_GATTS_WRITE: conn={conn_handle_write}, handle={attr_handle}")
+            print(f"_IRQ_GATTS_WRITE: conn={conn_handle_write}, handle={attr_handle}")
             if attr_handle == self.cccd_handle:
                 try:
                     value_written = self.ble.gatts_read(attr_handle)
@@ -158,24 +206,20 @@ class BluetoothKeyboard:
                     self.notifications_enabled = False
             else:
                 print("  Write was to a different handle.")
-
-        elif event == self.IRQ_GATTS_READ_REQUEST:
+        elif event == self._IRQ_GATTS_READ_REQUEST:
             conn_handle_read, attr_handle = data
-            print(f"IRQ_GATTS_READ_REQUEST: conn={conn_handle_read}, handle={attr_handle}")
+            print(f"_IRQ_GATTS_READ_REQUEST: conn={conn_handle_read}, handle={attr_handle}")
             return None
-
-        elif event == self.IRQ_ENCRYPTION_UPDATE:
+        elif event == self._IRQ_ENCRYPTION_UPDATE:
             conn_handle_enc, encrypted, authenticated, bonded_status, key_size = data
             print(f"Encryption state: encrypted={encrypted}, authenticated={authenticated}, bonded={bonded_status}")
-
-        elif event == self.IRQ_GET_SECRET:
+        elif event == self._IRQ_GET_SECRET:
             sec_type, index, key = data; key = bytes(key) if key is not None else None
             if key is None: return None
             if self.paired_device_keys and (sec_type, key) in self.paired_device_keys:
                 return self.paired_device_keys[(sec_type, key)]
             return None
-
-        elif event == self.IRQ_SET_SECRET:
+        elif event == self._IRQ_SET_SECRET:
             sec_type, key, value = data
             key = bytes(key) if key is not None else None
             value = bytes(value) if value is not None else None
@@ -183,30 +227,30 @@ class BluetoothKeyboard:
                 self.paired_device_keys.pop((sec_type, key), None); self._save_paired_device(); return True
             else:
                 self.paired_device_keys[(sec_type, key)] = value; self._save_paired_device(); return True
-
-        elif event == self.IRQ_MTU_EXCHANGED:
+        elif event == self._IRQ_MTU_EXCHANGED:
             conn_handle_mtu, mtu = data
-            print(f"IRQ_MTU_EXCHANGED: new MTU={mtu}")
-
+            print(f"_IRQ_MTU_EXCHANGED: new MTU={mtu}")
         else:
             print(f"Unhandled event: {event}")
 
     def _start_advertising(self) -> None:
         """Starts BLE advertising."""
-        adv_data = self._build_adv_data(name="MicroKeyBoard", service_uuids=[0x1812])
+        adv_data = self._build_adv_data(name=self.device_name, service_uuids=[0x1812])
         try:
             self.ble.gap_advertise(interval_us=100000, adv_data=adv_data, connectable=True, resp_data=None)
             print("Advertising started...")
         except Exception as e:
             print(f"Failed to start advertising: {e}")
 
+    def connected(self):
+        return self.conn_handle is not None and self.notifications_enabled
+
     def run(self):
         """Main execution method."""
         self.ble.active(True)
         print("BLE Radio Active.")
-
         try:
-            self.ble.config(gap_name="MicroKeyBoard", mitm=True, bond=True, le_secure=True, io=self.IO_CAPABILITY_DISPLAY_ONLY)
+            self.ble.config(gap_name=self.device_name, mitm=True, bond=True, le_secure=True, io=self._IO_CAPABILITY_DISPLAY_ONLY)
             print("BLE Configured.")
         except Exception as e: print(f"Error setting BLE config: {e}")
 
@@ -230,7 +274,7 @@ class BluetoothKeyboard:
             self.cccd_handle = h_input_cccd
             print(f"Services registered. Report Handle: {self.report_handle}, CCCD Handle: {self.cccd_handle}")
 
-            self.ble.gatts_write(h_report_map, usb_keyboard._KEYBOARD_REPORT_DESC)
+            self.ble.gatts_write(h_report_map, _KEYBOARD_REPORT_DESC)
             hid_info_value = struct.pack("<HBB", 0x0111, 0x00, 0x01)
             self.ble.gatts_write(h_hid_info, hid_info_value)
             input_ref_value = struct.pack("<BB", 1, 1)
@@ -250,12 +294,19 @@ class BluetoothKeyboard:
 
         print("Setup complete. Waiting for connections...")
 
+        sequence = [KeyCode.M, KeyCode.I, KeyCode.C, KeyCode.R, KeyCode.O]
+
         while True:
-            if self.conn_handle is not None and self.notifications_enabled:
-                self.send_m_key()
-                time.sleep_ms(2000)
+            if self.connected():
+                for keycode in sequence:
+                    self.send_keys([keycode])
+                    time.sleep_ms(100)
+                    self.send_keys([])
+                    time.sleep_ms(100)
+                break
             else:
                 time.sleep_ms(200)
+
 
 if __name__ == "__main__":
     keyboard = BluetoothKeyboard()
