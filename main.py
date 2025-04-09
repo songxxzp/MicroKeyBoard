@@ -7,6 +7,8 @@ from typing import List, Dict
 from machine import Pin
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
+from bluetoothkeyboard import BluetoothKeyboard
+
 
 DEBUG = True
 
@@ -180,7 +182,7 @@ class PhysicalKeyBoard:
 
 class VirtualKeyBoard:
     def __init__(self,
-        mode: str = "usb_hid",
+        mode: str = "bluetooth",
         mapping_path: str = "config/mapping.json",
         fn_mapping_path: str = "config/fn_mapping.json",
         key_num: int = 68,  # Real used key num.
@@ -189,20 +191,29 @@ class VirtualKeyBoard:
         self.mode = mode
         self.key_num = key_num
         self.phsical_key_board = PhysicalKeyBoard(max_keys=max_phiscal_keys)
-        if self.phsical_key_board.is_pressed():
+
+        if self.phsical_key_board.is_pressed():  # TODO: phsical key function
             self.mode = "debug"
 
         assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
         # assert key_num == len(self.virtual_keys), "virt key num is not expected."
 
-        self.interface = KeyboardInterface()  # wrap interface
         if self.mode == "usb_hid":
+            # TODO: USBKeyBoard class
+            self.interface = KeyboardInterface()  # wrap interface
             self.usb_device = usb.device.get()
             self.usb_device.init(self.interface, builtin_driver=True)
-        else:
+        if self.mode == "bluetooth":
+            self.interface = BluetoothKeyboard()
+            self.interface.start()
+        elif self.mode == "debug":
+            # TODO: DebugKeyBoard class
             global DEBUG
             DEBUG = True
+            self.interface = None
             print("Enabled DEBUG MODE")
+        else:
+            raise NotImplementedError(f"mode {self.mode} not implemented.")
 
         self.keystates = []
         self.prev_keystates = []
@@ -220,7 +231,8 @@ class VirtualKeyBoard:
             self.prev_keystates.extend(self.keystates)
             if DEBUG:
                 print(self.keystates)
-            self.interface.send_keys(self.keystates)
+            if self.interface is not None:
+                self.interface.send_keys(self.keystates)
 
 
 def main():
