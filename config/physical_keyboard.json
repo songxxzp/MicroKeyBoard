@@ -1,0 +1,14 @@
+{
+    "ktype": "74hc165",
+    "clock_pin": 11,
+    "pl_pin": 12,
+    "ce_pin": 13,
+    "read_pin": 14,
+    "max_keys": 72,
+    "keymap_path": "/config/physical_keymap.json",
+    "ltype": "neopixel",
+    "led_pixels": 68,
+    "max_light_level": 16,
+    "led_data_pin": 10,
+    "led_power_pin": 9
+}

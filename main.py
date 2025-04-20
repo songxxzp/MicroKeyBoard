@@ -1,9 +1,10 @@
 import time
 import json
 import random
+import neopixel
 import usb.device
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 from machine import Pin
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
@@ -17,6 +18,26 @@ def partial(func, *args):
     def wrapper(*more_args):
         return func(*args, *more_args)
     return wrapper
+
+
+class LEDManager:
+    def __init__(
+        self,
+        led_config: Dict      
+    ):
+        self.ltype = led_config.get("ltype", "neopixel")
+        self.led_pixels = led_config.get("led_pixels", 68)
+        self.max_light_level = led_config.get("max_light_level", 16)
+        self.led_data_pin = led_config.get("led_data_pin")
+        self.led_power_pin = led_config.get("led_power_pin")
+        
+        self.led_power = Pin(self.led_power_pin, Pin.OUT)
+        self.led_power.value(1)
+
+        self.pixels = neopixel.NeoPixel(Pin(self.led_data_pin, Pin.OUT), self.led_pixels)
+        for i in range(self.led_pixels):
+            self.pixels[i] = (self.max_light_level, self.max_light_level, self.max_light_level)
+        self.pixels.write()
 
 
 class VirtualKey:
@@ -97,18 +118,31 @@ class PhysicalKey:
     def default_released_function(self):  # TODO
         pass
 
-        
+
 class PhysicalKeyBoard:
     def __init__(
         self,
-        clock_pin: int = 11,
-        pl_pin: int = 12,
-        ce_pin: int = 13,
-        read_pin: int = 14,
-        max_keys: int = 72,  # The maximum number of keys for key scanning. The actual number of keys used is less than or equal to this number.
-        keymap_path: str = "/config/physical_keymap.json",
-        max_light_level: int = 16
+        key_config_path: str = "/config/physical_keyboard.json",
+        ktype: Optional[str] = None,
+        clock_pin: Optional[int] = None,
+        pl_pin: Optional[int] = None,
+        ce_pin: Optional[int] = None,
+        read_pin: Optional[int] = None,
+        max_keys: Optional[int] = None,  # The maximum number of keys for key scanning. The actual number of keys used is less than or equal to this number.
+        keymap_path: Optional[str] = None,  # "/config/physical_keymap.json",
+        max_light_level: Optional[int] = None
     ):
+        self.key_config = json.load(open(key_config_path))
+
+        ktype = ktype or self.key_config.get("ktype", None)
+        clock_pin = pl_pin or self.key_config.get("clock_pin", None)
+        pl_pin = pl_pin or self.key_config.get("pl_pin", None)
+        ce_pin = ce_pin or self.key_config.get("ce_pin", None)
+        read_pin = read_pin or self.key_config.get("read_pin", None)
+        max_keys = max_keys or self.key_config.get("max_keys", None)
+        keymap_path = keymap_path or self.key_config.get("keymap_path", None)
+        max_light_level = max_light_level or self.key_config.get("max_light_level", None)
+    
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
         self.key_ce = Pin(ce_pin, Pin.OUT, value=1)
         self.key_clk = Pin(clock_pin, Pin.OUT, value=0)
@@ -116,12 +150,13 @@ class PhysicalKeyBoard:
         
         self.max_keys = max_keys
         self.physical_keys = [None for _ in range(max_keys)]
-        # self.keymap_path = keymap_path
         self.keymap_dict = json.load(open(keymap_path))
         self.used_key_num = len(self.keymap_dict)
         assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
         for key_name, key_id in self.keymap_dict.items():
             self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name, max_light_level=max_light_level)
+        
+        self.led = LEDManager(self.key_config)
         
     def scan_keys(self, interval_us=1) -> List[bool]:
         key_states = [False for _ in range(self.max_keys)]  # Pressed: 1; Released: 0

@@ -3,6 +3,10 @@
 An MicroPython Implementation Of [pyKeyboardOS](https://github.com/songxxzp/pyKeyboardOS).
 ![Key](pictures/poc_2024.png)
 
+## Features
+- USB
+- BLE
+
 ## RoadMap
 
 - Key Mapping
@@ -11,4 +15,14 @@ An MicroPython Implementation Of [pyKeyboardOS](https://github.com/songxxzp/pyKe
 - Full-key rollover HID
 - Guided OTA
 - WLAN
+- MIDI
+- SDCARD
+
+## Versions
+
+### 0318
+The ESP32S3 serves as the MCU, featuring shift register key panels and neopixel LEDs. It can be powered by either AAA or Li-ion batteries, but lacks onboard Li-ion chargers.
+
+### 0413
+
 
