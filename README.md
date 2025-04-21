@@ -21,7 +21,9 @@ An MicroPython Implementation Of [pyKeyboardOS](https://github.com/songxxzp/pyKe
 ## Versions
 
 ### 0318
-The ESP32S3 serves as the MCU, featuring shift register key panels and neopixel LEDs. It can be powered by either AAA or Li-ion batteries, but lacks onboard Li-ion chargers.
+- `/home/song/workspace/MicroKeyBoard/versions/0318/config`
+- The ESP32S3 serves as the MCU, featuring shift register key panels and neopixel LEDs. It can be powered by either AAA or Li-ion batteries, but lacks onboard Li-ion chargers.
+
 
 ### 0413
 

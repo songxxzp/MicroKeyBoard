@@ -128,6 +128,8 @@ class PhysicalKeyBoard:
         pl_pin: Optional[int] = None,
         ce_pin: Optional[int] = None,
         read_pin: Optional[int] = None,
+        power_pin: Optional[int] = None,
+        wakeup_pin: Optional[int] = None,
         max_keys: Optional[int] = None,  # The maximum number of keys for key scanning. The actual number of keys used is less than or equal to this number.
         keymap_path: Optional[str] = None,  # "/config/physical_keymap.json",
         max_light_level: Optional[int] = None
@@ -139,6 +141,8 @@ class PhysicalKeyBoard:
         pl_pin = pl_pin or self.key_config.get("pl_pin", None)
         ce_pin = ce_pin or self.key_config.get("ce_pin", None)
         read_pin = read_pin or self.key_config.get("read_pin", None)
+        power_pin = power_pin or self.key_config.get("power_pin", None)
+        wakeup_pin = wakeup_pin or self.key_config.get("wakeup_pin", None)
         max_keys = max_keys or self.key_config.get("max_keys", None)
         keymap_path = keymap_path or self.key_config.get("keymap_path", None)
         max_light_level = max_light_level or self.key_config.get("max_light_level", None)
@@ -147,7 +151,9 @@ class PhysicalKeyBoard:
         self.key_ce = Pin(ce_pin, Pin.OUT, value=1)
         self.key_clk = Pin(clock_pin, Pin.OUT, value=0)
         self.key_in = Pin(read_pin, Pin.IN)
-        
+        self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
+        self.wakeup_pin = Pin(wakeup_pin, Pin.IN) if wakeup_pin is not None else None
+
         self.max_keys = max_keys
         self.physical_keys = [None for _ in range(max_keys)]
         self.keymap_dict = json.load(open(keymap_path))
@@ -223,15 +229,14 @@ class VirtualKeyBoard:
         key_num: int = 68,  # Real used key num.
         max_phiscal_keys: int = 72,
     ):
+        # assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
+        self.phsical_key_board = PhysicalKeyBoard(max_keys=max_phiscal_keys)  # TODO: as an arg
+        key_num = max(key_num, self.phsical_key_board.used_key_num)
         self.mode = mode
         self.key_num = key_num
-        self.phsical_key_board = PhysicalKeyBoard(max_keys=max_phiscal_keys)
 
         if self.phsical_key_board.is_pressed():  # TODO: phsical key function
             self.mode = "debug"
-
-        assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
-        # assert key_num == len(self.virtual_keys), "virt key num is not expected."
 
         if self.mode == "usb_hid":
             # TODO: USBKeyBoard class
