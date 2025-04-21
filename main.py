@@ -5,9 +5,13 @@ import neopixel
 import usb.device
 
 from typing import List, Dict, Optional
-from machine import Pin
+from machine import Pin, I2S, SPI
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
+import st7789py as st7789
+import vga2_bold_16x32 as font
+
+from graphics import interpolate
 from bluetoothkeyboard import BluetoothKeyboard
 
 
@@ -38,6 +42,83 @@ class LEDManager:
         for i in range(self.led_pixels):
             self.pixels[i] = (self.max_light_level, self.max_light_level, self.max_light_level)
         self.pixels.write()
+
+
+class AudioManager:
+    def __init__(
+        self,
+        sck_pin: int = 48,
+        ws_pin: int = 47,
+        sd_pin: int = 45,
+        i2s_id: int = 0,
+        bits: int = 16,
+        format=I2S.MONO,
+        rate=16000,
+        ibuf: int = 65536,
+    ):
+        self.audio_out = I2S(
+            i2s_id,
+            sck=Pin(sck_pin),
+            ws=Pin(ws_pin),
+            sd=Pin(sd_pin),
+            mode=I2S.TX,
+            bits=bits,
+            format=format,
+            rate=rate,  # 8000
+            ibuf=ibuf,  # 5000
+        )
+        self.wav = None
+        self.wav_samples = bytearray(1000)
+        self.wav_samples_mv = memoryview(self.wav_samples)
+        self.is_playing = False
+    
+    def _i2s_callback(self, arg):
+        if self.wav and self.is_playing:
+            num_read = self.wav.readinto(self.wav_samples_mv)
+            if num_read == 0:  # 文件结束
+                self.stop()
+            else:
+                self.audio_out.write(self.wav_samples_mv[:num_read])
+
+    def play(self, wav_file):
+        if self.is_playing:
+            self.stop()
+            
+        self.wav = open(wav_file, "rb")
+        self.wav.seek(44)  # 跳过WAV文件头
+        self.is_playing = True
+        self.audio_out.irq(self._i2s_callback)
+        # 触发第一次写入
+        self._i2s_callback(None)
+
+    def stop(self):
+        if self.is_playing:
+            self.is_playing = False
+            self.audio_out.irq(None)
+            if self.wav:
+                self.wav.close()
+                self.wav = None
+
+    def block_play(self, wav_file):
+        if self.is_playing:
+            return False
+        wav = open(wav_file, "rb")
+        _ = wav.seek(44)
+        wav_samples = bytearray(1000)
+        wav_samples_mv = memoryview(wav_samples)
+        while True:
+            num_read = wav.readinto(wav_samples_mv)
+            if num_read == 0:
+                # end-of-file, advance to first byte of Data section
+                # _ = wav.seek(44)
+                break
+            else:
+                _ = self.audio_out.write(wav_samples_mv[:num_read])
+        wav.close()
+        return True
+
+    def __del__(self):
+        self.audio_out.deinit()
 
 
 class VirtualKey:
@@ -275,14 +356,58 @@ class VirtualKeyBoard:
                 self.interface.send_keys(self.keystates)
 
 
+def screen():
+    tft = st7789.ST7789(
+        SPI(2, baudrate=30000000, sck=Pin(1), mosi=Pin(2), miso=None),
+        135,
+        240,
+        reset=Pin(42, Pin.OUT),
+        cs=Pin(40, Pin.OUT),
+        dc=Pin(41, Pin.OUT),
+        backlight=Pin(39, Pin.OUT),
+        rotation=1,
+    )
+
+    names = ["Micro", "Key", "Board"]
+
+    color_values = (255, 255, 255)
+    height_division = tft.height // len(color_values)
+    for i, color_value in enumerate(color_values):
+        start_row = i * height_division
+        end_row = (i + 1) * height_division
+        for row in range(start_row, end_row):
+            rgb_color = [0 if idx != i else int(interpolate(0, color_value, row - start_row, height_division)) for idx in range(3)]
+            color = st7789.color565(rgb_color)
+            tft.hline(0, row, tft.width, color)
+
+        name = names[i]
+        text_x = (tft.width - font.WIDTH * len(name)) // 2
+        text_y = start_row + (end_row - start_row - font.HEIGHT) // 2
+        tft.text(font, name, text_x, text_y, st7789.WHITE, color)
+
+    return tft
+
+
 def main():
     # time.sleep_ms(3000)
     # phsical_key_board = PhysicalKeyBoard()
+    audio_manager = AudioManager()
+    audio_manager.block_play("wav/piano/16000/C4vH.wav")
+    audio_manager.play("wav/piano/16000/C4vH.wav")
     virtual_key_board = VirtualKeyBoard()
     time.sleep_ms(50)
+    tft = screen()
     while True:
         virtual_key_board.scan()
         time.sleep_ms(1)
+        for color in [st7789.RED, st7789.GREEN, st7789.BLUE]:
+            for x in range(tft.width):
+                tft.pixel(x, 0, color)
+                tft.pixel(x, tft.height - 1, color)
+
+            for y in range(tft.height):
+                tft.pixel(0 , y, color)
+                tft.pixel(tft.width - 1, y, color)
 
 
 if __name__ == "__main__":
