@@ -2,8 +2,25 @@ import time
 
 from machine import Pin
 from machine import I2S
-from typing import Optional
+from typing import Optional, List
 from ulab import numpy as np
+
+
+class Voice:
+    def __init__(self,
+            loaded_data,
+            current_pos_bytes,
+            voice_name,
+            start_time: Optional[int] = None,
+            finished: bool = False,
+            active: bool = False
+        ):
+        self.loaded_data = loaded_data
+        self.current_pos_bytes = current_pos_bytes
+        self.voice_name = voice_name
+        self.start_time = start_time or time.ticks_ms()
+        self.finished = finished
+        self.active = active
 
 
 class AudioManager:
@@ -72,7 +89,8 @@ class AudioManager:
         self._is_playing = False
         # Active voices: List of [loaded_data: bytearray, current_pos_bytes: int]
         # Store position in bytes as data is bytearray
-        self.active_voices = []
+        self.active_voices: List[Voice] = []
+        self.added_voices: List[Voice] = []
         self.disabled_voices = {}
         self._all_voices_fully_processed = True # True when no voices are active
 
@@ -104,14 +122,39 @@ class AudioManager:
         total_samples_mixed = 0
         voices_finished_this_chunk = []
 
+        for voice in self.added_voices:
+            if not (voice.finished or voice.active):
+                self.active_voices.append(voice)
+                voice.active = True
+
+        # Max voices check
+        if len(self.active_voices) >= self.max_voices:
+            if self.active_voices:
+                # Oldest voice is [loaded_data, current_pos_bytes]
+                oldest_voice = self.active_voices.pop(0)
+                print(f"pop voice: {oldest_voice.voice_name}")
+                # No file object to close
+
         # Iterate through active voices [loaded_data, current_pos_bytes]
         i = 0
         while i < len(self.active_voices):
             voice_info = self.active_voices[i]
-            loaded_data = voice_info[0] # The bytearray data
-            current_pos_bytes = voice_info[1] # Current read position in bytes
-            voice_name = voice_info[2]
-            start_time = voice_info[3]
+            loaded_data = voice_info.loaded_data # The bytearray data
+            current_pos_bytes = voice_info.current_pos_bytes # Current read position in bytes
+            voice_name = voice_info.voice_name
+            start_time = voice_info.start_time
+
+            if voice_info.finished:
+                voices_finished_this_chunk.append(i)
+                print(f"finished '{voice_name}'  at {time.ticks_ms()}.")
+                i += 1
+                continue
+
+            if voice_name in self.disabled_voices and self.disabled_voices[voice_name] > start_time and time.ticks_ms() > self.disabled_voices[voice_name]:
+                voices_finished_this_chunk.append(i)
+                print(f"stopping '{voice_name}'  at {time.ticks_ms()}.")
+                i += 1
+                continue
 
             # Get memory slice for the current chunk (bytes)
             chunk_bytes_mv = memoryview(loaded_data)[current_pos_bytes : current_pos_bytes + self.BUFFER_BYTES]
@@ -129,21 +172,21 @@ class AudioManager:
 
                 total_samples_mixed = max(total_samples_mixed, num_read_samples)
                 # Update position for this voice (in bytes)
-                voice_info[1] += num_read_bytes
+                voice_info.current_pos_bytes += num_read_bytes
 
 
             # Check if this voice finished reading (reached end of loaded data)
             if current_pos_bytes + num_read_bytes >= len(loaded_data):
                 voices_finished_this_chunk.append(i)
-            if voice_name in self.disabled_voices and self.disabled_voices[voice_name] > start_time:
-                voices_finished_this_chunk.append(i)
-
             i += 1
 
         # Remove finished voices
-        for i in sorted(voices_finished_this_chunk, reverse=True):
-             if i < len(self.active_voices):
-                 del self.active_voices[i]
+        for i in voices_finished_this_chunk:
+            self.active_voices[i].finished = True
+        self.active_voices = [voice for voice in self.active_voices if not voice.finished]
+        # for i in sorted(voices_finished_this_chunk, reverse=True):
+        #      if i < len(self.active_voices):
+        #          del self.active_voices[i]
 
         self.valid_samples[buffer_idx] = total_samples_mixed
         self._all_voices_fully_processed = not self.active_voices
@@ -171,6 +214,9 @@ class AudioManager:
             # Assumes ndarray.tobytes() exists
             byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
             self.audio_out.write(byte_data)
+        else:
+            print("Nothing write to I2S, stopping...")
+            self.stop_all()
 
         # Update state for the next IRQ
         self.buffer_to_play_idx = prep_idx
@@ -182,7 +228,7 @@ class AudioManager:
         if not self._is_playing or (self._all_voices_fully_processed and samples_to_play == 0):
              self.stop_all()
 
-    def play_note(self, wav_file: str, nickname: Optional[str] = None):
+    def play_note(self, wav_file: str, nickname: Optional[str] = None, playtime: Optional[int] = None):
         """Plays a note (non-blocking). Adds the WAV file data (from cache) to active voices."""
 
         # Ensure file is loaded into memory cache first
@@ -193,17 +239,13 @@ class AudioManager:
         # Get loaded data from cache
         loaded_data = self._loaded_wavs[wav_file]
 
-        # Max voices check
-        if len(self.active_voices) >= self.max_voices:
-            if self.active_voices:
-                # Oldest voice is [loaded_data, current_pos_bytes]
-                oldest_voice = self.active_voices.pop(0)
-                # No file object to close
-
         # Add new voice with loaded data and start position 0
         # Position is in bytes
-        self.active_voices.append([loaded_data, 0, wav_file, time.time()])
-        print(f"startting '{wav_file}' at {time.time()}. len(self.active_voices): {len(self.active_voices)}")
+        self.added_voices = [voice for voice in self.added_voices if not (voice.active or voice.finished)]
+        self.added_voices.append(Voice(loaded_data, 0, nickname or wav_file, time.ticks_ms()))
+        if playtime is not None:
+            self.disabled_voices[nickname or wav_file] = time.ticks_ms() + playtime
+        print(f"starting '{wav_file}' at {time.ticks_ms()}.")
 
         # If not playing, start the process
         if not self._is_playing:
@@ -211,26 +253,17 @@ class AudioManager:
             self._all_voices_fully_processed = False
 
             # Prepare the initial two buffers (in main thread)
-            self._prepare_buffer(0)
-            self._prepare_buffer(1) # Prepare the second buffer immediately after writing the first
-
-            # Initiate playback by writing the first buffer
-            # IRQ callback is already set up in __init__ and will be triggered
-            # when the I2S buffer needs data after this write.
-            samples_to_write_init = self.valid_samples[0]
-            if samples_to_write_init > 0:
-                # Convert NumPy int16 slice to bytes for initial write
-                byte_data_init = self.audio_buffers[0][:samples_to_write_init].tobytes()
-                self.audio_out.write(byte_data_init)
-                self.buffer_to_play_idx = 1 # Next IRQ plays buffer 1
-            else:
-                # If the first buffer prepared was empty, stop immediately.
-                self.stop_all()
-                self.buffer_to_play_idx = 0 # Ensure index is reset
+            # self._prepare_buffer(0) # blanck buffer
+            self.audio_buffers[0][:] = 0
+            self.audio_buffers[1][:] = 0
+            self.valid_samples = [256, 256]
+            byte_data_init = self.audio_buffers[0][:].tobytes()
+            self.audio_out.write(byte_data_init)
+            # self._prepare_buffer(1) # Prepare the second buffer immediately after writing the first
+            self.buffer_to_play_idx = 1 # Next IRQ plays buffer 1
 
     def stop_note(self, wav_file: str):
-        self.disabled_voices[wav_file] = time.time()
-        print(f"stopping '{wav_file}'  at {time.time()}.")
+        self.disabled_voices[wav_file] = time.ticks_ms()
 
     def stop_all(self):
         """Stops all voices and playback."""
@@ -241,6 +274,8 @@ class AudioManager:
 
             # Active voices only contain data and position
             self.active_voices.clear()
+            self.disabled_voices.clear()
+            self.added_voices.clear()
 
             # Reset buffer state (NumPy buffers)
             self.audio_buffers[0][:] = 0
@@ -270,51 +305,50 @@ def main():
 
     # Load WAV files into memory first
     print("Loading WAVs...")
-    audio_manager.load_wav("wav/piano/8000/C4.wav")
-    audio_manager.load_wav("wav/piano/8000/D4.wav")
-    audio_manager.load_wav("wav/piano/8000/E4.wav")
-    audio_manager.load_wav("wav/piano/8000/F4.wav")
-    audio_manager.load_wav("wav/piano/8000/G4.wav")
-    audio_manager.load_wav("wav/piano/8000/A4.wav")
-    audio_manager.load_wav("wav/piano/8000/B4.wav")
     audio_manager.load_wav("wav/piano/8000/C5.wav")
+    audio_manager.load_wav("wav/piano/8000/D5.wav")
+    audio_manager.load_wav("wav/piano/8000/E5.wav")
+    audio_manager.load_wav("wav/piano/8000/F5.wav")
+    audio_manager.load_wav("wav/piano/8000/G5.wav")
+    audio_manager.load_wav("wav/piano/8000/A5.wav")
+    audio_manager.load_wav("wav/piano/8000/B5.wav")
     print("Loading complete.")
 
     quarter = 556
     eighth = 278
     sixteenth = 139
 
-    audio_manager.play_note("wav/piano/8000/E4.wav")
+    audio_manager.play_note("wav/piano/8000/E5.wav", playtime=quarter)
     time.sleep_ms(quarter)
     
-    audio_manager.play_note("wav/piano/8000/D4.wav")
-    audio_manager.stop_note("wav/piano/8000/E4.wav")
+    audio_manager.play_note("wav/piano/8000/D5.wav", playtime=eighth)
+    # audio_manager.stop_note("wav/piano/8000/E5.wav")
     time.sleep_ms(eighth)
 
-    audio_manager.play_note("wav/piano/8000/C4.wav")
-    audio_manager.stop_note("wav/piano/8000/D4.wav")
+    audio_manager.play_note("wav/piano/8000/C5.wav")
+    audio_manager.stop_note("wav/piano/8000/D5.wav")
     time.sleep_ms(quarter)
 
-    audio_manager.play_note("wav/piano/8000/D4.wav")
-    audio_manager.stop_note("wav/piano/8000/C4.wav")
+    audio_manager.play_note("wav/piano/8000/D5.wav")
+    audio_manager.stop_note("wav/piano/8000/C5.wav")
     time.sleep_ms(eighth)
 
-    audio_manager.play_note("wav/piano/8000/E4.wav")
-    audio_manager.stop_note("wav/piano/8000/D4.wav")
+    audio_manager.play_note("wav/piano/8000/E5.wav")
+    audio_manager.stop_note("wav/piano/8000/D5.wav")
     time.sleep_ms(eighth + sixteenth)
 
-    audio_manager.play_note("wav/piano/8000/F4.wav")
-    audio_manager.stop_note("wav/piano/8000/E4.wav")
+    audio_manager.play_note("wav/piano/8000/F5.wav")
+    audio_manager.stop_note("wav/piano/8000/E5.wav")
     time.sleep_ms(sixteenth)
     
-    audio_manager.play_note("wav/piano/8000/E4.wav")
-    audio_manager.stop_note("wav/piano/8000/F4.wav")
+    audio_manager.play_note("wav/piano/8000/E5.wav")
+    audio_manager.stop_note("wav/piano/8000/F5.wav")
     time.sleep_ms(eighth)
     
-    audio_manager.play_note("wav/piano/8000/D4.wav")
-    audio_manager.stop_note("wav/piano/8000/E4.wav")
+    audio_manager.play_note("wav/piano/8000/D5.wav")
+    audio_manager.stop_note("wav/piano/8000/E5.wav")
     time.sleep_ms(quarter + eighth)
-    audio_manager.stop_note("wav/piano/8000/D4.wav")
+    audio_manager.stop_note("wav/piano/8000/D5.wav")
 
     audio_manager.stop_all()
 

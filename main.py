@@ -9,7 +9,7 @@ import array
 import asyncio
 from ulab import numpy as np
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 from machine import Pin, I2S, SPI
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
@@ -46,11 +46,18 @@ class LEDManager:
 
 
 class VirtualKey:
-    def __init__(self, key_name: str, keycode: int, physical_key: "PhysicalKey", pressed_function=None) -> None:
+    def __init__(
+        self,
+        key_name: str,
+        keycode: int,
+        physical_key: "PhysicalKey",
+        pressed_function: Optional[Callable] = None,
+        released_function: Optional[Callable] = None
+    ) -> None:
         self.keycode = keycode
         self.key_name = key_name
-        self.pressed_function = self.default_pressed_function if pressed_function is None else pressed_function  # TODO: rename
-        self.released_function = self.default_released_function  # TODO
+        self.pressed_function = pressed_function or self.default_pressed_function
+        self.released_function = released_function or self.default_released_function
         # TODO: press condition function
         self.bind_physical = None
         self.pressed = False
@@ -89,6 +96,11 @@ class VirtualKey:
         
     def release(self):
         self.pressed = False
+        if self.released_function:
+            released_function_result = self.released_function()
+            if released_function_result is None:  # TODO
+                return None
+            return released_function_result
         return None
 
 
@@ -199,7 +211,7 @@ class PhysicalKeyBoard:
             if not physical_key.pressed and key_state:
                 physical_key.pressed = True
                 if DEBUG:
-                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed.")
+                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
                 if physical_key.bind_virtual is not None:
                     physical_key.bind_virtual.press()
                 else:
@@ -208,7 +220,7 @@ class PhysicalKeyBoard:
             if physical_key.pressed and not key_state:
                 physical_key.pressed = False
                 if DEBUG:
-                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) is released.")
+                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) is released at {time.ticks_ms()}.")
                 if physical_key.bind_virtual is not None:
                     physical_key.bind_virtual.release()
                 else:
@@ -263,9 +275,13 @@ class VirtualKeyBoard:
         self.keystates = []
         self.prev_keystates = []
 
-        self.virtual_keys: List[VirtualKey] = [VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key, pressed_function=None) for physical_key in self.phsical_key_board.physical_keys if physical_key is not None]
+        self.virtual_keys: List[VirtualKey] = self.build_virtual_keys()
 
-    def scan(self, interval_us=1):
+    def build_virtual_keys(self):
+        virtual_keys: List[VirtualKey] = [VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key, pressed_function=None) for physical_key in self.phsical_key_board.physical_keys if physical_key is not None]
+        return virtual_keys
+
+    def scan(self, interval_us: int = 1):
         self.keystates.clear()
         self.phsical_key_board.scan(interval_us=interval_us)
         for virtual_key in self.virtual_keys:
@@ -280,7 +296,40 @@ class VirtualKeyBoard:
                 self.interface.send_keys(self.keystates)
 
 
-def screen():
+class MusicKeyBoard(VirtualKeyBoard):
+    def __init__(self, 
+        audio_manager: AudioManager,
+        music_mapping_path: str,
+        *args,
+        **kwargs
+    ):
+        self.audio_manager = audio_manager
+        self.music_mapping_path = music_mapping_path
+        self.music_mapping = json.load(open(self.music_mapping_path))
+        super().__init__(*args, **kwargs)
+
+        for wav_file in self.music_mapping.values():
+            self.audio_manager.load_wav(wav_file)
+    
+    def build_virtual_keys(self):
+        virtual_keys: List[VirtualKey] = []
+        for physical_key in self.phsical_key_board.physical_keys:
+            if physical_key is not None:
+                if physical_key.key_name in self.music_mapping:
+                    virtual_key = VirtualKey(
+                        key_name=physical_key.key_name,
+                        keycode=getattr(KeyCode, physical_key.key_name, None),
+                        physical_key=physical_key,
+                        pressed_function=partial(self.audio_manager.play_note, self.music_mapping[physical_key.key_name]),
+                        released_function=partial(self.audio_manager.stop_note, self.music_mapping[physical_key.key_name]),
+                    )
+                else:
+                    virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key)
+                virtual_keys.append(virtual_key)
+        return virtual_keys
+
+
+def screen():  # TODO: build screen manager
     tft = st7789.ST7789(
         SPI(2, baudrate=30000000, sck=Pin(1), mosi=Pin(2), miso=None),
         135,
@@ -321,7 +370,6 @@ def music(audio_manager: AudioManager):
     audio_manager.load_wav("wav/piano/8000/G4.wav")
     audio_manager.load_wav("wav/piano/8000/A4.wav")
     audio_manager.load_wav("wav/piano/8000/B4.wav")
-    audio_manager.load_wav("wav/piano/8000/C5.wav")
     print("Loading complete.")
 
     quarter = 556
@@ -367,25 +415,30 @@ def main():
     time.sleep_ms(1000)
     audio_manager = AudioManager(
         rate=8000,
-        buffer_samples=256
+        buffer_samples=256,
+        ibuf=4096
     )
 
-    music(audio_manager)
+    # music(audio_manager)
 
-    virtual_key_board = VirtualKeyBoard()
+    # virtual_key_board = VirtualKeyBoard()
+    virtual_key_board = MusicKeyBoard(
+        audio_manager,
+        "config/music_keymap.json"
+    )
     time.sleep_ms(50)
     tft = screen()
     while True:
         virtual_key_board.scan()
         time.sleep_ms(1)
-        for color in [st7789.RED, st7789.GREEN, st7789.BLUE]:
-            for x in range(tft.width):
-                tft.pixel(x, 0, color)
-                tft.pixel(x, tft.height - 1, color)
+        # for color in [st7789.RED, st7789.GREEN, st7789.BLUE]:
+        #     for x in range(tft.width):
+        #         tft.pixel(x, 0, color)
+        #         tft.pixel(x, tft.height - 1, color)
 
-            for y in range(tft.height):
-                tft.pixel(0 , y, color)
-                tft.pixel(tft.width - 1, y, color)
+        #     for y in range(tft.height):
+        #         tft.pixel(0 , y, color)
+        #         tft.pixel(tft.width - 1, y, color)
 
 
 if __name__ == "__main__":

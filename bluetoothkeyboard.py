@@ -70,7 +70,7 @@ class BluetoothKeyboard(object):
         except Exception as e: print("Failed to save paired devices:", e)
 
     def _load_paired_device(self) -> Dict:
-        if not path_exists(self.paired_deivces_path): return {}
+        if not exists(self.paired_deivces_path): return {}
         try:
             keys_dict = {}
             with open(self.paired_deivces_path, 'r') as f: paired_device_data = json.load(f)
