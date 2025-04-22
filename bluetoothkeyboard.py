@@ -9,7 +9,7 @@ from typing import Dict, List
 from micropython import const
 from machine import Timer
 
-from utils import path_exists
+from utils import exists
 from constants import KEYBOARD_REPORT_DESC, IO_CAPABILITY_DISPLAY_ONLY, IRQ_CENTRAL_CONNECT, IRQ_CENTRAL_DISCONNECT, IRQ_GATTS_WRITE, IRQ_GATTS_READ_REQUEST, IRQ_ENCRYPTION_UPDATE, IRQ_GET_SECRET, IRQ_SET_SECRET, IRQ_MTU_EXCHANGED, FLAG_READ, FLAG_WRITE_NO_RESPONSE, FLAG_WRITE, FLAG_NOTIFY
 
 

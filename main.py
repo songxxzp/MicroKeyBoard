@@ -1,8 +1,13 @@
+import _thread
 import time
 import json
 import random
 import neopixel
 import usb.device
+import gc
+import array
+import asyncio
+from ulab import numpy as np
 
 from typing import List, Dict, Optional
 from machine import Pin, I2S, SPI
@@ -11,17 +16,13 @@ from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 import st7789py as st7789
 import vga2_bold_16x32 as font
 
+from audio import AudioManager
 from graphics import interpolate
 from bluetoothkeyboard import BluetoothKeyboard
+from utils import partial, exists
 
 
 DEBUG = True
-
-
-def partial(func, *args):
-    def wrapper(*more_args):
-        return func(*args, *more_args)
-    return wrapper
 
 
 class LEDManager:
@@ -42,83 +43,6 @@ class LEDManager:
         for i in range(self.led_pixels):
             self.pixels[i] = (self.max_light_level, self.max_light_level, self.max_light_level)
         self.pixels.write()
-
-
-class AudioManager:
-    def __init__(
-        self,
-        sck_pin: int = 48,
-        ws_pin: int = 47,
-        sd_pin: int = 45,
-        i2s_id: int = 0,
-        bits: int = 16,
-        format=I2S.MONO,
-        rate=16000,
-        ibuf: int = 65536,
-    ):
-        self.audio_out = I2S(
-            i2s_id,
-            sck=Pin(sck_pin),
-            ws=Pin(ws_pin),
-            sd=Pin(sd_pin),
-            mode=I2S.TX,
-            bits=bits,
-            format=format,
-            rate=rate,  # 8000
-            ibuf=ibuf,  # 5000
-        )
-        self.wav = None
-        self.wav_samples = bytearray(1000)
-        self.wav_samples_mv = memoryview(self.wav_samples)
-        self.is_playing = False
-    
-    def _i2s_callback(self, arg):
-        if self.wav and self.is_playing:
-            num_read = self.wav.readinto(self.wav_samples_mv)
-            if num_read == 0:  # 文件结束
-                self.stop()
-            else:
-                self.audio_out.write(self.wav_samples_mv[:num_read])
-
-    def play(self, wav_file):
-        if self.is_playing:
-            self.stop()
-            
-        self.wav = open(wav_file, "rb")
-        self.wav.seek(44)  # 跳过WAV文件头
-        self.is_playing = True
-        self.audio_out.irq(self._i2s_callback)
-        # 触发第一次写入
-        self._i2s_callback(None)
-
-    def stop(self):
-        if self.is_playing:
-            self.is_playing = False
-            self.audio_out.irq(None)
-            if self.wav:
-                self.wav.close()
-                self.wav = None
-
-    def block_play(self, wav_file):
-        if self.is_playing:
-            return False
-        wav = open(wav_file, "rb")
-        _ = wav.seek(44)
-        wav_samples = bytearray(1000)
-        wav_samples_mv = memoryview(wav_samples)
-        while True:
-            num_read = wav.readinto(wav_samples_mv)
-            if num_read == 0:
-                # end-of-file, advance to first byte of Data section
-                # _ = wav.seek(44)
-                break
-            else:
-                _ = self.audio_out.write(wav_samples_mv[:num_read])
-        wav.close()
-        return True
-
-    def __del__(self):
-        self.audio_out.deinit()
 
 
 class VirtualKey:
@@ -388,12 +312,66 @@ def screen():
     return tft
 
 
+def music(audio_manager: AudioManager):
+    print("Loading WAVs...")
+    audio_manager.load_wav("wav/piano/8000/C4.wav")
+    audio_manager.load_wav("wav/piano/8000/D4.wav")
+    audio_manager.load_wav("wav/piano/8000/E4.wav")
+    audio_manager.load_wav("wav/piano/8000/F4.wav")
+    audio_manager.load_wav("wav/piano/8000/G4.wav")
+    audio_manager.load_wav("wav/piano/8000/A4.wav")
+    audio_manager.load_wav("wav/piano/8000/B4.wav")
+    audio_manager.load_wav("wav/piano/8000/C5.wav")
+    print("Loading complete.")
+
+    quarter = 556
+    eighth = 278
+    sixteenth = 139
+    while True:
+        audio_manager.play_note("wav/piano/8000/E4.wav")
+        time.sleep_ms(quarter)
+        audio_manager.stop_note("wav/piano/8000/E4.wav")
+        
+        audio_manager.play_note("wav/piano/8000/D4.wav")
+        time.sleep_ms(eighth)
+        audio_manager.stop_note("wav/piano/8000/D4.wav")
+
+        audio_manager.play_note("wav/piano/8000/C4.wav")
+        time.sleep_ms(quarter)
+        audio_manager.stop_note("wav/piano/8000/C4.wav")
+
+        audio_manager.play_note("wav/piano/8000/D4.wav")
+        time.sleep_ms(eighth)
+        audio_manager.stop_note("wav/piano/8000/D4.wav")
+
+        audio_manager.play_note("wav/piano/8000/E4.wav")
+        time.sleep_ms(eighth + sixteenth)
+        audio_manager.stop_note("wav/piano/8000/E4.wav")
+
+        audio_manager.play_note("wav/piano/8000/F4.wav")
+        time.sleep_ms(sixteenth)
+        audio_manager.stop_note("wav/piano/8000/F4.wav")
+        
+        audio_manager.play_note("wav/piano/8000/E4.wav")
+        time.sleep_ms(eighth)
+        audio_manager.stop_note("wav/piano/8000/E4.wav")
+        
+        audio_manager.play_note("wav/piano/8000/D4.wav")
+        time.sleep_ms(quarter + eighth)
+        audio_manager.stop_note("wav/piano/8000/D4.wav")
+
+    audio_manager.stop_all()
+
+
 def main():
-    # time.sleep_ms(3000)
-    # phsical_key_board = PhysicalKeyBoard()
-    audio_manager = AudioManager()
-    audio_manager.block_play("wav/piano/16000/C4vH.wav")
-    audio_manager.play("wav/piano/16000/C4vH.wav")
+    time.sleep_ms(1000)
+    audio_manager = AudioManager(
+        rate=8000,
+        buffer_samples=256
+    )
+
+    music(audio_manager)
+
     virtual_key_board = VirtualKeyBoard()
     time.sleep_ms(50)
     tft = screen()
@@ -412,3 +390,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
