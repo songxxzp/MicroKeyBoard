@@ -180,10 +180,11 @@ class PhysicalKeyBoard:
             self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name, max_light_level=max_light_level)
         
         self.led = LEDManager(self.key_config)
+        self.key_states_buffer = [False for _ in range(self.max_keys)]  # Pressed: 1; Released: 0
         
     def scan_keys(self, interval_us=1) -> List[bool]:
-        key_states = [False for _ in range(self.max_keys)]  # Pressed: 1; Released: 0
-                
+        key_states = self.key_states_buffer
+
         # Load key state
         self.key_pl.value(0)
         time.sleep_us(interval_us)
@@ -298,19 +299,30 @@ class VirtualKeyBoard:
 
 class MusicKeyBoard(VirtualKeyBoard):
     def __init__(self, 
-        audio_manager: AudioManager,
         music_mapping_path: str,
+        audio_manager: Optional[AudioManager] = None,
         *args,
         **kwargs
     ):
-        self.audio_manager = audio_manager
-        self.music_mapping_path = music_mapping_path
-        self.music_mapping = json.load(open(self.music_mapping_path))
+        if exists(music_mapping_path):
+            self.music_mapping_path = music_mapping_path
+            if audio_manager is None:
+                audio_manager = AudioManager(
+                    rate=8000,
+                    buffer_samples=256,
+                    ibuf=1024
+                )
+            self.audio_manager = audio_manager
+            self.music_mapping = json.load(open(self.music_mapping_path))
+            for wav_file in self.music_mapping.values():
+                self.audio_manager.load_wav(wav_file)
+        else:
+            self.music_mapping_path = None
+            self.audio_manager = None
+            self.music_mapping = {}
+
         super().__init__(*args, **kwargs)
 
-        for wav_file in self.music_mapping.values():
-            self.audio_manager.load_wav(wav_file)
-    
     def build_virtual_keys(self):
         virtual_keys: List[VirtualKey] = []
         for physical_key in self.phsical_key_board.physical_keys:
@@ -413,24 +425,27 @@ def music(audio_manager: AudioManager):
 
 def main():
     time.sleep_ms(1000)
-    audio_manager = AudioManager(
-        rate=8000,
-        buffer_samples=256,
-        ibuf=4096
-    )
-
-    # music(audio_manager)
-
     # virtual_key_board = VirtualKeyBoard()
     virtual_key_board = MusicKeyBoard(
-        audio_manager,
         "config/music_keymap.json"
     )
     time.sleep_ms(50)
     tft = screen()
+    count = 0
+    start_time = time.time()
     while True:
-        virtual_key_board.scan()
-        time.sleep_ms(1)
+        virtual_key_board.scan(0)
+        # virtual_key_board.phsical_key_board.scan(0)
+        # virtual_key_board.phsical_key_board.scan_keys(0)
+        # time.sleep_ms(1)
+        # count += 1
+        # current_time = time.time()
+        
+        # if current_time - start_time >= 1:
+        #     print(f"scan speed: {count}/s")
+            
+        #     count = 0
+        #     start_time = current_time
         # for color in [st7789.RED, st7789.GREEN, st7789.BLUE]:
         #     for x in range(tft.width):
         #         tft.pixel(x, 0, color)

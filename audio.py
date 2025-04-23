@@ -114,6 +114,11 @@ class AudioManager:
         print(f"Loaded '{wav_file}' ({len(wav_data)} bytes).")
         return wav_data
 
+    def unload_wav(self, wav_file: str):
+        """Pop WAV file data from memory cache."""
+        # TODO: FIFO Dict
+        self._loaded_wavs.pop(wav_file)
+
     def _prepare_buffer(self, buffer_idx: int):
         """Mixes active voices (from memory) using NumPy."""
         target_buffer_np = self.audio_buffers[buffer_idx]
@@ -215,7 +220,7 @@ class AudioManager:
             byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
             self.audio_out.write(byte_data)
         else:
-            print("Nothing write to I2S, stopping...")
+            print(f"Nothing write to I2S, stopping... active_voices: {len(self.active_voices)}, added_voices: {len(self.added_voices)}")
             self.stop_all()
 
         # Update state for the next IRQ
@@ -256,7 +261,7 @@ class AudioManager:
             # self._prepare_buffer(0) # blanck buffer
             self.audio_buffers[0][:] = 0
             self.audio_buffers[1][:] = 0
-            self.valid_samples = [256, 256]
+            self.valid_samples = [self.BUFFER_BYTES, self.BUFFER_BYTES]
             byte_data_init = self.audio_buffers[0][:].tobytes()
             self.audio_out.write(byte_data_init)
             # self._prepare_buffer(1) # Prepare the second buffer immediately after writing the first

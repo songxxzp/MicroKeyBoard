@@ -6,12 +6,14 @@ An MicroPython Implementation Of [pyKeyboardOS](https://github.com/songxxzp/pyKe
 ## Features
 - USB
 - BLE
+- LED
+- TFT Screen
+- Piano
 
 ## RoadMap
 
 - Key Mapping
-- LED
-- LCD Screen
+- RGB Effects
 - Full-key rollover HID
 - Guided OTA
 - WLAN
@@ -26,5 +28,13 @@ An MicroPython Implementation Of [pyKeyboardOS](https://github.com/songxxzp/pyKe
 
 
 ### 0413
+- Developing
 
+
+## Used Libs:
+[st7789py](https://github.com/russhughes/st7789py_mpy)
+
+
+## Acknowledgement:
+[st7789py](https://github.com/russhughes/st7789py_mpy)
 
