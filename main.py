@@ -8,6 +8,7 @@ import gc
 import array
 import asyncio
 from ulab import numpy as np
+import micropython
 
 from typing import List, Dict, Optional, Callable
 from machine import Pin, I2S, SPI
@@ -16,13 +17,13 @@ from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 import st7789py as st7789
 import vga2_bold_16x32 as font
 
-from audio import AudioManager
+from audio import AudioManager, Sampler
 from graphics import interpolate
 from bluetoothkeyboard import BluetoothKeyboard
 from utils import partial, exists
 
 
-DEBUG = True
+DEBUG = False
 
 
 class LEDManager:
@@ -301,6 +302,7 @@ class MusicKeyBoard(VirtualKeyBoard):
     def __init__(self, 
         music_mapping_path: str,
         audio_manager: Optional[AudioManager] = None,
+        mode: str = "C Major",
         *args,
         **kwargs
     ):
@@ -308,14 +310,22 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.music_mapping_path = music_mapping_path
             if audio_manager is None:
                 audio_manager = AudioManager(
-                    rate=8000,
-                    buffer_samples=256,
-                    ibuf=1024
+                    rate=16000,
+                    buffer_samples=512,
+                    ibuf=4096,
+                    always_play=True
                 )
             self.audio_manager = audio_manager
-            self.music_mapping = json.load(open(self.music_mapping_path))
-            for wav_file in self.music_mapping.values():
-                self.audio_manager.load_wav(wav_file)
+            self.sampler = Sampler("/wav/piano/16000")
+            self.music_mappings = json.load(open(self.music_mapping_path))
+            self.mode = mode
+            self.music_mapping = self.music_mappings[mode]
+            micropython.mem_info()
+            for i, note in enumerate(sorted(list(self.music_mapping.values()))):
+                print(f"Loading {i} th note: {note}, alloc: {gc.mem_alloc()}, free: {gc.mem_free()}")
+                self.audio_manager.load_wav(note, self.sampler.get_sample(note).tobytes())
+                # micropython.mem_info()
+                gc.collect()
         else:
             self.music_mapping_path = None
             self.audio_manager = None
@@ -353,7 +363,7 @@ def screen():  # TODO: build screen manager
         rotation=1,
     )
 
-    names = ["Micro", "Key", "Board"]
+    names = ["MicroKeyBoard", "Piano Mode", "F Major"]
 
     color_values = (255, 255, 255)
     height_division = tft.height // len(color_values)
@@ -373,68 +383,20 @@ def screen():  # TODO: build screen manager
     return tft
 
 
-def music(audio_manager: AudioManager):
-    print("Loading WAVs...")
-    audio_manager.load_wav("wav/piano/8000/C4.wav")
-    audio_manager.load_wav("wav/piano/8000/D4.wav")
-    audio_manager.load_wav("wav/piano/8000/E4.wav")
-    audio_manager.load_wav("wav/piano/8000/F4.wav")
-    audio_manager.load_wav("wav/piano/8000/G4.wav")
-    audio_manager.load_wav("wav/piano/8000/A4.wav")
-    audio_manager.load_wav("wav/piano/8000/B4.wav")
-    print("Loading complete.")
-
-    quarter = 556
-    eighth = 278
-    sixteenth = 139
-    while True:
-        audio_manager.play_note("wav/piano/8000/E4.wav")
-        time.sleep_ms(quarter)
-        audio_manager.stop_note("wav/piano/8000/E4.wav")
-        
-        audio_manager.play_note("wav/piano/8000/D4.wav")
-        time.sleep_ms(eighth)
-        audio_manager.stop_note("wav/piano/8000/D4.wav")
-
-        audio_manager.play_note("wav/piano/8000/C4.wav")
-        time.sleep_ms(quarter)
-        audio_manager.stop_note("wav/piano/8000/C4.wav")
-
-        audio_manager.play_note("wav/piano/8000/D4.wav")
-        time.sleep_ms(eighth)
-        audio_manager.stop_note("wav/piano/8000/D4.wav")
-
-        audio_manager.play_note("wav/piano/8000/E4.wav")
-        time.sleep_ms(eighth + sixteenth)
-        audio_manager.stop_note("wav/piano/8000/E4.wav")
-
-        audio_manager.play_note("wav/piano/8000/F4.wav")
-        time.sleep_ms(sixteenth)
-        audio_manager.stop_note("wav/piano/8000/F4.wav")
-        
-        audio_manager.play_note("wav/piano/8000/E4.wav")
-        time.sleep_ms(eighth)
-        audio_manager.stop_note("wav/piano/8000/E4.wav")
-        
-        audio_manager.play_note("wav/piano/8000/D4.wav")
-        time.sleep_ms(quarter + eighth)
-        audio_manager.stop_note("wav/piano/8000/D4.wav")
-
-    audio_manager.stop_all()
-
-
 def main():
     time.sleep_ms(1000)
+    micropython.mem_info()
     # virtual_key_board = VirtualKeyBoard()
     virtual_key_board = MusicKeyBoard(
-        "config/music_keymap.json"
+        music_mapping_path="config/music_keymap.json",
+        mode = "F Major"
     )
     time.sleep_ms(50)
     tft = screen()
     count = 0
     start_time = time.time()
     while True:
-        virtual_key_board.scan(0)
+        virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
         # time.sleep_ms(1)

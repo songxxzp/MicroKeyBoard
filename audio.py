@@ -1,4 +1,5 @@
 import time
+import os
 
 from machine import Pin
 from machine import I2S
@@ -23,6 +24,116 @@ class Voice:
         self.active = active
 
 
+class Sampler:
+    def __init__(self,
+        sample_dir : str,
+        rate : int = 16000,
+    ):
+        """
+        Initialize the sampler
+        :param sample_dir: Directory where sample files are located
+        :param rate: Sampling rate (default 16000)
+        """
+        self.sample_dir = sample_dir
+        self.rate = rate
+        self.samples = {}  # Store sample filepath
+        self.keys = []     # Store the keys (pitches) of the sample notes
+        self.load_samples()
+
+    def load_sample(self, filename):
+        """
+        Load sample file to memory
+        """
+        with open(f"{self.sample_dir}/{filename}", "rb") as f:
+            f.seek(44)  # Skip the WAV file header
+            raw = np.frombuffer(f.read(), dtype=np.int16)
+        return raw
+
+    def load_samples(self, dummy=True):
+        """
+        Load sample files
+        """
+        # Get the note names of the sample files and load the data
+        for filename in os.listdir(self.sample_dir):
+            if filename.endswith("vH.wav"):
+                print(f"Sampler found {filename}.")
+                note = filename.split("vH")[0]
+                self.samples[note] = filename
+                self.keys.append(note)
+        # Sort the notes by pitch (assuming the note format is standard like A3, C4)
+        self.keys = sorted(self.keys, key=self.note_to_frequency)
+
+    def note_to_frequency(self, note):
+        """
+        Convert a note name to frequency
+        :param note: Note name (e.g., A4, C#3)
+        :return: Corresponding frequency (Hz)
+        """
+        # Note frequency calculation formula: f = 440 * 2^((n - 69) / 12)
+        # Where n is the MIDI note number
+        note_map = {'C': 0, 'C#': 1, 'D': 2, 'D#': 3, 'E': 4, 'F': 5, 'F#': 6, 'G': 7, 'G#': 8, 'A': 9, 'A#': 10, 'B': 11}
+        octave = int(note[-1])  # Get the octave
+        base_note = note[:-1]   # Get the note
+        midi_number = (octave + 1) * 12 + note_map[base_note]
+        frequency = 440.0 * (2 ** ((midi_number - 69) / 12))
+        return frequency
+
+    def get_sample(self, note):
+        """
+        Get the audio data for a specified note
+        :param note: Target note name (e.g., A4, C#3)
+        :return: Audio data (numpy array)
+        """
+        if note in self.samples:
+            # If the note directly exists in the samples, return the sample data
+            return self.load_sample(self.samples[note])
+        else:
+            # If the note does not exist, use pitch shifting to generate it
+            return self.pitch_shift(note)
+
+    def pitch_shift(self, note):
+        """
+        Use pitch shifting to generate the target note
+        :param note: Target note name (e.g., A4, C#3)
+        :return: Generated audio data (numpy array)
+        """
+        # Find the closest sample note
+        target_freq = self.note_to_frequency(note)
+        closest_sample, closest_freq = self.find_closest_sample(target_freq)
+
+        # Calculate the pitch shift factor
+        shift_factor = target_freq / closest_freq
+
+        # Use numpy interpolation to achieve pitch shifting
+        original_length = len(closest_sample)
+        new_length = int(original_length / shift_factor)
+        indices = np.arange(new_length) * shift_factor
+        indices = indices[indices < original_length]  # Ensure indices are within range
+        shifted_sample = np.interp(indices, np.arange(original_length), closest_sample)
+
+        return np.array(shifted_sample, dtype=np.int16)
+
+    def find_closest_sample(self, target_freq):
+        """
+        Find the closest sample note to the target frequency
+        :param target_freq: Target frequency (Hz)
+        :return: The closest sample note data and frequency
+        """
+        closest_key = None
+        closest_freq = None
+        min_diff = float('inf')
+
+        for key in self.keys:
+            freq = self.note_to_frequency(key)
+            diff = abs(freq - target_freq)
+            if diff < min_diff:
+                min_diff = diff
+                closest_key = key
+                closest_freq = freq
+
+        return self.load_sample(self.samples[closest_key]), closest_freq
+
+
 class AudioManager:
     # Define buffer size in samples
     # Based on user's BUFFER_BYTES = 4096 and bytes_per_sample = 2 (16-bit mono)
@@ -38,15 +149,17 @@ class AudioManager:
         bits: int = 16,
         format=I2S.MONO,
         rate=16000,
-        ibuf: int = 16384,
+        ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
+        always_play: bool = False,  # Always write to buffer to trigger callback.
     ):
         if bits != 16 or format != I2S.MONO:
              raise ValueError("Supports only 16-bit MONO audio")
 
         self.BUFFER_SAMPLES = buffer_samples
         self.BUFFER_BYTES = self.BUFFER_SAMPLES * 2
+        self.always_play = always_play
 
         self.audio_out = I2S(
             i2s_id,
@@ -98,17 +211,20 @@ class AudioManager:
 
         # I2S Interrupt setup
         self.audio_out.irq(self._i2s_callback)
+        if self.always_play:
+            self._i2s_callback(self)
 
-    def load_wav(self, wav_file: str):
+    def load_wav(self, wav_file: str, wav_data: Optional[bytearray] = None):
         """Loads WAV file data into memory cache."""
         if wav_file in self._loaded_wavs:
             print(f"'{wav_file}' already loaded.")
             return self._loaded_wavs[wav_file]
 
-        print(f"Loading '{wav_file}'...")
-        with open(wav_file, "rb") as f:
-            f.seek(44) # Skip WAV header
-            wav_data = bytearray(f.read())
+        if wav_data is None:
+            print(f"Loading '{wav_file}'...")
+            with open(wav_file, "rb") as f:
+                f.seek(44) # Skip WAV header
+                wav_data = bytearray(f.read())
 
         self._loaded_wavs[wav_file] = wav_data
         print(f"Loaded '{wav_file}' ({len(wav_data)} bytes).")
@@ -175,7 +291,7 @@ class AudioManager:
                 # Ensure slices match size
                 target_buffer_np[:num_read_samples] += temp_int16_chunk[:num_read_samples]
 
-                total_samples_mixed = max(total_samples_mixed, num_read_samples)
+                total_samples_mixed = self.BUFFER_SAMPLES if self.always_play else max(total_samples_mixed, num_read_samples)  
                 # Update position for this voice (in bytes)
                 voice_info.current_pos_bytes += num_read_bytes
 
@@ -213,15 +329,22 @@ class AudioManager:
         samples_to_play = self.valid_samples[play_idx]
         prep_idx = (play_idx + 1) % 2
 
+        write_tiggered = False
+
         # Write the prepared buffer to I2S if it has data
-        if samples_to_play > 0:
+        if self.always_play:
+            byte_data = self.audio_buffers[play_idx][:self.BUFFER_BYTES].tobytes()
+            self.audio_out.write(byte_data)
+            write_tiggered = True
+        elif samples_to_play > 0:
             # Convert NumPy int16 slice to bytes
             # Assumes ndarray.tobytes() exists
             byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
             self.audio_out.write(byte_data)
-        else:
-            print(f"Nothing write to I2S, stopping... active_voices: {len(self.active_voices)}, added_voices: {len(self.added_voices)}")
-            self.stop_all()
+            write_tiggered = True
+        # else:
+        #     print(f"Nothing write to I2S, stopping... active_voices: {len(self.active_voices)}, added_voices: {len(self.added_voices)}")
+        #     self.stop_all()
 
         # Update state for the next IRQ
         self.buffer_to_play_idx = prep_idx
@@ -230,8 +353,15 @@ class AudioManager:
 
         # Check if playback should stop
         # Stops if _is_playing is False or if all voices processed AND the buffer just played was empty
-        if not self._is_playing or (self._all_voices_fully_processed and samples_to_play == 0):
-             self.stop_all()
+        if self.always_play:
+            assert write_tiggered, "write not triggered!"
+        elif not self._is_playing or (self._all_voices_fully_processed and samples_to_play == 0):
+            self.stop_all()
+        elif not write_tiggered:
+            print(f"Nothing write to I2S, retriggering...")
+            assert caller is not self, "Loop"
+            self._i2s_callback(self)
+
 
     def play_note(self, wav_file: str, nickname: Optional[str] = None, playtime: Optional[int] = None):
         """Plays a note (non-blocking). Adds the WAV file data (from cache) to active voices."""
@@ -273,6 +403,8 @@ class AudioManager:
     def stop_all(self):
         """Stops all voices and playback."""
         # Keep IRQ enabled but rely on _is_playing flag and empty voices/buffers
+        # assert self.always_play == False
+        # self.always_play = False
 
         if self._is_playing:
             self._is_playing = False
@@ -304,56 +436,53 @@ class AudioManager:
 def main():
     time.sleep_ms(1000) # Sleep before starting audio
     audio_manager = AudioManager(
-        rate=8000,
-        buffer_samples=256
+        rate=16000,
+        buffer_samples=512,
+        always_play=False
     )
 
     # Load WAV files into memory first
     print("Loading WAVs...")
-    audio_manager.load_wav("wav/piano/8000/C5.wav")
-    audio_manager.load_wav("wav/piano/8000/D5.wav")
-    audio_manager.load_wav("wav/piano/8000/E5.wav")
-    audio_manager.load_wav("wav/piano/8000/F5.wav")
-    audio_manager.load_wav("wav/piano/8000/G5.wav")
-    audio_manager.load_wav("wav/piano/8000/A5.wav")
-    audio_manager.load_wav("wav/piano/8000/B5.wav")
+    sampler = Sampler("/wav/piano/16000")
+    for note in ["C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6"]:
+        audio_manager.load_wav(note, sampler.get_sample(note).tobytes())
     print("Loading complete.")
 
     quarter = 556
     eighth = 278
     sixteenth = 139
 
-    audio_manager.play_note("wav/piano/8000/E5.wav", playtime=quarter)
+    audio_manager.play_note("E5", playtime=quarter)
     time.sleep_ms(quarter)
     
-    audio_manager.play_note("wav/piano/8000/D5.wav", playtime=eighth)
-    # audio_manager.stop_note("wav/piano/8000/E5.wav")
+    audio_manager.play_note("D5", playtime=eighth)
+    # audio_manager.stop_note("E5")
     time.sleep_ms(eighth)
 
-    audio_manager.play_note("wav/piano/8000/C5.wav")
-    audio_manager.stop_note("wav/piano/8000/D5.wav")
+    audio_manager.play_note("C5")
+    audio_manager.stop_note("D5")
     time.sleep_ms(quarter)
 
-    audio_manager.play_note("wav/piano/8000/D5.wav")
-    audio_manager.stop_note("wav/piano/8000/C5.wav")
+    audio_manager.play_note("D5")
+    audio_manager.stop_note("C5")
     time.sleep_ms(eighth)
 
-    audio_manager.play_note("wav/piano/8000/E5.wav")
-    audio_manager.stop_note("wav/piano/8000/D5.wav")
+    audio_manager.play_note("E5")
+    audio_manager.stop_note("D5")
     time.sleep_ms(eighth + sixteenth)
 
-    audio_manager.play_note("wav/piano/8000/F5.wav")
-    audio_manager.stop_note("wav/piano/8000/E5.wav")
+    audio_manager.play_note("F5")
+    audio_manager.stop_note("E5")
     time.sleep_ms(sixteenth)
     
-    audio_manager.play_note("wav/piano/8000/E5.wav")
-    audio_manager.stop_note("wav/piano/8000/F5.wav")
+    audio_manager.play_note("E5")
+    audio_manager.stop_note("F5")
     time.sleep_ms(eighth)
     
-    audio_manager.play_note("wav/piano/8000/D5.wav")
-    audio_manager.stop_note("wav/piano/8000/E5.wav")
+    audio_manager.play_note("D5")
+    audio_manager.stop_note("E5")
     time.sleep_ms(quarter + eighth)
-    audio_manager.stop_note("wav/piano/8000/D5.wav")
+    audio_manager.stop_note("D5")
 
     audio_manager.stop_all()
 
