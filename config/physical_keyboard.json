@@ -10,7 +10,8 @@
     "keymap_path": "/config/physical_keymap.json",
     "ltype": "neopixel",
     "led_pixels": 71,
-    "max_light_level": 1,
+    "max_light_level": 16,
+    "onstart_light_level": 1,
     "led_data_pin": 9,
     "led_power_pin": 8
 }

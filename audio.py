@@ -82,7 +82,7 @@ class Sampler:
         # Sort the notes by pitch (assuming the note format is standard like A3, C4)
         self.keys = sorted(self.keys, key=self.note_to_frequency)
     
-    def note_to_midinumber(self, note: str) -> int:
+    def note_to_midinumber(self, note: str) -> int:  # TODO: move this function
         """
         Convert a note name (e.g., A4, C#3) to its MIDI note number.
 
@@ -136,8 +136,7 @@ class Sampler:
         # If strictly need 0-127, add check: `if not 0 <= midi_number <= 127: return -1`
         return midi_number
 
-
-    def midinumber_to_note(self, midinumber: int) -> str:
+    def midinumber_to_note(self, midinumber: int) -> str:  # TODO: move this function
         """
         Convert a MIDI note number to its note name (e.g., 69 -> A4).
 
@@ -206,10 +205,13 @@ class Sampler:
         """
         # Find the closest sample note
         target_freq = self.note_to_frequency(note)
-        closest_sample, closest_freq = self.find_closest_sample(target_freq)
+        closest_sample_path, closest_freq = self.find_closest_sample(target_freq)
 
         # Calculate the pitch shift factor
         shift_factor = target_freq / closest_freq
+
+        # Load closest sample
+        closest_sample = self.load_sample(closest_sample_path, duration=None if duration is None else (duration+0.1)*shift_factor)
 
         # Use numpy interpolation to achieve pitch shifting
         original_length = len(closest_sample)
@@ -242,7 +244,7 @@ class Sampler:
                 closest_key = key
                 closest_freq = freq
 
-        return self.load_sample(self.samples[closest_key]), closest_freq
+        return self.samples[closest_key], closest_freq
 
 
 class AudioManager:

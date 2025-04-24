@@ -10,7 +10,7 @@ import asyncio
 from ulab import numpy as np
 import micropython
 
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Optional, Callable, Tuple
 from machine import Pin, I2S, SPI
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
@@ -34,6 +34,7 @@ class LEDManager:
         self.ltype = led_config.get("ltype", "neopixel")
         self.led_pixels = led_config.get("led_pixels", 68)
         self.max_light_level = led_config.get("max_light_level", 16)
+        self.onstart_light_level = led_config.get("onstart_light_level", 1)
         self.led_data_pin = led_config.get("led_data_pin")
         self.led_power_pin = led_config.get("led_power_pin")
         
@@ -41,8 +42,20 @@ class LEDManager:
         self.led_power.value(1)
 
         self.pixels = neopixel.NeoPixel(Pin(self.led_data_pin, Pin.OUT), self.led_pixels)
-        for i in range(self.led_pixels):
-            self.pixels[i] = (self.max_light_level, self.max_light_level, self.max_light_level)
+        # for i in range(self.led_pixels):
+        #     self.pixels[i] = (self.onstart_light_level, self.onstart_light_level, self.onstart_light_level)
+        self.pixels.fill((self.onstart_light_level, self.onstart_light_level, self.onstart_light_level))
+        self.pixels.write()
+
+    def led_switch(self, open: bool = True):
+        self.led_power.value(open)
+
+    def set_pixel(self, i: int, color: Tuple[int], write: bool = False):
+        self.pixels[i] = (max(l, self.max_light_level) for l in color)
+        if write:
+            self.pixels.write()
+
+    def write_pixels(self):
         self.pixels.write()
 
 
@@ -216,7 +229,7 @@ class PhysicalKeyBoard:
                 if DEBUG:
                     print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
                 if physical_key.bind_virtual is not None:
-                    physical_key.bind_virtual.press()
+                    physical_key.bind_virtual.press()  # maybe use pressed_function instead?
                 else:
                     if DEBUG:
                         print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind")
@@ -243,7 +256,7 @@ class PhysicalKeyBoard:
 
 class VirtualKeyBoard:
     def __init__(self,
-        mode: str = "bluetooth",
+        connection_mode: str = "bluetooth",
         mapping_path: str = "config/mapping.json",
         fn_mapping_path: str = "config/fn_mapping.json",
         key_num: int = 68,  # Real used key num.
@@ -252,37 +265,96 @@ class VirtualKeyBoard:
         # assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
         self.phsical_key_board = PhysicalKeyBoard(max_keys=max_phiscal_keys)  # TODO: as an arg
         key_num = max(key_num, self.phsical_key_board.used_key_num)
-        self.mode = mode
         self.key_num = key_num
 
-        if self.phsical_key_board.is_pressed():  # TODO: phsical key function
-            self.mode = "debug"
+        # editable keyboard state
+        self.connection_mode = None
+        self.layer = 0
 
-        if self.mode == "usb_hid":
-            # TODO: USBKeyBoard class
-            self.interface = KeyboardInterface()  # wrap interface
-            self.usb_device = usb.device.get()
-            self.usb_device.init(self.interface, builtin_driver=True)
-        if self.mode == "bluetooth":
-            self.interface = BluetoothKeyboard()
-            self.interface.start()
-        elif self.mode == "debug":
-            # TODO: DebugKeyBoard class
-            global DEBUG
-            DEBUG = True
-            self.interface = None
-            print("Enabled DEBUG MODE")
-        else:
-            raise NotImplementedError(f"mode {self.mode} not implemented.")
+        if self.phsical_key_board.is_pressed():  # TODO: phsical key function
+            connection_mode = "debug"
+
+        self.connection_mode = None
+        self.ble_interface = None
+        self.set_connection_mode(connection_mode)
 
         self.keystates = []
         self.prev_keystates = []
 
         self.virtual_keys: List[VirtualKey] = self.build_virtual_keys()
 
+    def set_connection_mode(self, connection_mode: str):
+        if connection_mode == self.connection_mode:
+            return
+
+        if connection_mode == "usb_hid":
+            pass
+        elif connection_mode == "bluetooth":
+            if self.ble_interface is not None:
+                self.ble_interface.stop()
+
+        self.connection_mode = connection_mode
+        if self.connection_mode == "usb_hid":
+            print("swiching to usb mode")
+            # TODO: USBKeyBoard class
+            self.usb_interface = KeyboardInterface()  # wrap interface
+            self.usb_device = usb.device.get()
+            self.usb_device.init(self.usb_interface, builtin_driver=True)
+            self.interface = self.usb_interface
+        elif self.connection_mode == "bluetooth":
+            print("swiching to ble mode")
+            self.ble_interface = BluetoothKeyboard()
+            self.ble_interface.start()
+            self.interface = self.ble_interface
+        elif self.connection_mode == "debug":
+            # TODO: DebugKeyBoard class
+            global DEBUG
+            DEBUG = True
+            self.interface = None
+            print("Enabled DEBUG MODE")
+        else:
+            raise NotImplementedError(f"connection mode {self.connection_mode} not implemented.")
+
     def build_virtual_keys(self):
-        virtual_keys: List[VirtualKey] = [VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key, pressed_function=None) for physical_key in self.phsical_key_board.physical_keys if physical_key is not None]
+        virtual_keys: List[VirtualKey] = []
+        for physical_key in self.phsical_key_board.physical_keys:
+            if physical_key is not None:
+                virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key, pressed_function=None, released_function=None)
+                virtual_keys.append(virtual_key)
         return virtual_keys
+
+    def build_fn_layer(self, virtual_keys: List[VirtualKey]):
+        for virtual_key in virtual_keys:
+            if virtual_key.key_name == "FN":  # create ".py" file or build from file.
+                def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
+                    print("change to layer 1")
+                    virtual_key_board.layer = 1
+                def fn_released_function(virtual_key_board: "VirtualKeyBoard"):
+                    print("change to layer 0")
+                    virtual_key_board.layer = 0
+                virtual_key.pressed_function = partial(fn_pressed_function, self)
+                virtual_key.released_function = partial(fn_released_function, self)
+            if virtual_key.key_name == "Q":
+                def ble_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        virtual_key_board.set_connection_mode("bluetooth")
+                    elif original_func:
+                        original_func()
+                virtual_key.pressed_function = partial(ble_pressed_function, self, virtual_key.pressed_function)
+            if virtual_key.key_name == "W":
+                def usb_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        virtual_key_board.set_connection_mode("usb_hid")
+                    elif original_func:
+                        original_func()
+                virtual_key.pressed_function = partial(usb_pressed_function, self, virtual_key.pressed_function)
+            if virtual_key.key_name == "E":
+                def debug_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        virtual_key_board.set_connection_mode("debug")
+                    elif original_func:
+                        original_func()
+                virtual_key.pressed_function = partial(debug_pressed_function, self, virtual_key.pressed_function)
 
     def scan(self, interval_us: int = 1):
         self.keystates.clear()
@@ -356,6 +428,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                 else:
                     virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key)
                 virtual_keys.append(virtual_key)
+        self.build_fn_layer(virtual_keys)
         return virtual_keys
 
 
