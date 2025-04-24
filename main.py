@@ -79,7 +79,8 @@ class VirtualKey:
             print(f"virtual({self.keycode}, {self.key_name}) is pressed.")
 
     def default_released_function(self):
-        pass
+        if DEBUG:
+            print(f"virtual({self.keycode}, {self.key_name}) is released.")
 
     # TODO: @property
     def is_pressed(self):
@@ -313,7 +314,8 @@ class MusicKeyBoard(VirtualKeyBoard):
                     rate=16000,
                     buffer_samples=1024,
                     ibuf=4096,
-                    always_play=True
+                    always_play=True,
+                    volume_factor=0.1
                 )
             self.audio_manager = audio_manager
             self.sampler = Sampler("/wav/piano/16000")
@@ -342,9 +344,15 @@ class MusicKeyBoard(VirtualKeyBoard):
                         key_name=physical_key.key_name,
                         keycode=getattr(KeyCode, physical_key.key_name, None),
                         physical_key=physical_key,
-                        pressed_function=partial(self.audio_manager.play_note, self.music_mapping[physical_key.key_name]),
-                        released_function=partial(self.audio_manager.stop_note, self.music_mapping[physical_key.key_name], delay=500),
+                        pressed_function=None,
+                        released_function=None,
                     )
+                    def pressed_function(virtual_key: VirtualKey, note: str):
+                        virtual_key.playing_wav_id = self.audio_manager.play_note(note)
+                    def released_function(virtual_key: VirtualKey):
+                        self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=500)
+                    virtual_key.pressed_function = partial(pressed_function, virtual_key, self.music_mapping[physical_key.key_name])
+                    virtual_key.released_function = partial(released_function, virtual_key)
                 else:
                     virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key)
                 virtual_keys.append(virtual_key)

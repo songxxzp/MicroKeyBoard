@@ -3,7 +3,7 @@ import os
 
 from machine import Pin
 from machine import I2S
-from typing import Optional, List
+from typing import Optional, List, Dict
 from ulab import numpy as np
 
 
@@ -36,6 +36,7 @@ class Sampler:
     def __init__(self,
         sample_dir : str,
         rate : int = 16000,
+        cache_dir : Optional[str] = None
     ):
         """
         Initialize the sampler
@@ -46,6 +47,7 @@ class Sampler:
         self.rate = rate
         self.samples = {}  # Store sample filepath
         self.keys = []     # Store the keys (pitches) of the sample notes
+        self.cache_dir = cache_dir
         self.load_samples()
 
     def load_sample(self, filename, duration: Optional[float] = None):
@@ -261,6 +263,7 @@ class AudioManager:
         ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
+        volume_factor: float = 0.2,
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):
         if bits != 16 or format != I2S.MONO:
@@ -287,7 +290,7 @@ class AudioManager:
         self.rate = rate
         self.max_voices = max_voices
         self.bytes_per_sample = (self.bits // 8) * (self.format + 1) # Should be 2
-        self.volume_factor = 0.33
+        self.volume_factor = volume_factor
 
         # Double buffers (NumPy int16 arrays)
         self.audio_buffers = [
@@ -314,7 +317,7 @@ class AudioManager:
         # Store position in bytes as data is bytearray
         self.active_voices: List[Voice] = []
         self.added_voices: List[Voice] = []
-        self.disabled_voices = {}
+        self.disabled_voices: Dict[int, int] = {}
         self.voice_num = 0
         self._all_voices_fully_processed = True # True when no voices are active
 
@@ -375,12 +378,13 @@ class AudioManager:
             loaded_data = voice_info.loaded_data # The bytearray data
             current_pos_bytes = voice_info.current_pos_bytes # Current read position in bytes
             voice_name = voice_info.voice_name
+            voice_id = voice_info.voice_id
             start_time = voice_info.start_time
             current_ms = time.ticks_ms()
 
-            if voice_name in self.disabled_voices and self.disabled_voices[voice_name] > start_time and current_ms > self.disabled_voices[voice_name]:
+            if voice_id in self.disabled_voices and self.disabled_voices[voice_id] > start_time and current_ms > self.disabled_voices[voice_id]:
                 voice_info.finished = True
-                print(f"stopping '{voice_name}'  at {current_ms}.")
+                print(f"stopping '{voice_name}, {voice_id}'  at {current_ms}.")
                 continue
 
             # Get memory slice for the current chunk (bytes)
@@ -482,7 +486,7 @@ class AudioManager:
         self.added_voices.append(voice)
         self.voice_num += 1
         if playtime is not None:
-            self.disabled_voices[nickname or wav_file] = time.ticks_ms() + playtime
+            self.disabled_voices[voice.voice_id] = time.ticks_ms() + playtime
         print(f"starting '{wav_file}' at {time.ticks_ms()}.")
 
         # If not playing, start the process
@@ -502,8 +506,18 @@ class AudioManager:
             # self._i2s_callback(self)
         return voice.voice_id
 
-    def stop_note(self, wav_file: str, delay: Optional[int] = None):
-        self.disabled_voices[wav_file] = time.ticks_ms() + (delay or 0)
+    def stop_note(self, wav_file: Optional[str] = None, wav_id: Optional[int] = None, delay: Optional[int] = None):
+        if wav_id is not None:
+            self.disabled_voices[wav_id] = time.ticks_ms() + (delay or 0)
+        elif wav_file is not None:
+            for voice in self.added_voices:
+                if voice.voice_name == wav_file:
+                    self.disabled_voices[voice.voice_id] = time.ticks_ms() + (delay or 0)
+            for voice in self.active_voices:
+                if voice.voice_name == wav_file:
+                    self.disabled_voices[voice.voice_id] = time.ticks_ms() + (delay or 0)
+        else:
+            raise ValueError("wav_file is None and wav_id is None")
 
     def stop_all(self):
         """Stops all voices and playback."""
@@ -603,7 +617,8 @@ def midi_example():
     audio_manager = AudioManager(
         rate=16000,
         buffer_samples=512,
-        always_play=False
+        always_play=False,
+        volume_factor=0.1
     )
 
     # Load WAV files into memory first
