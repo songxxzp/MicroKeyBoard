@@ -23,7 +23,7 @@ from bluetoothkeyboard import BluetoothKeyboard
 from utils import partial, exists
 
 
-DEBUG = False
+DEBUG = True
 
 
 class LEDManager:
@@ -311,7 +311,7 @@ class MusicKeyBoard(VirtualKeyBoard):
             if audio_manager is None:
                 audio_manager = AudioManager(
                     rate=16000,
-                    buffer_samples=512,
+                    buffer_samples=1024,
                     ibuf=4096,
                     always_play=True
                 )
@@ -321,9 +321,9 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.mode = mode
             self.music_mapping = self.music_mappings[mode]
             micropython.mem_info()
-            for i, note in enumerate(sorted(list(self.music_mapping.values()))):
+            for i, note in enumerate(sorted(list(self.music_mapping.values()), key=lambda n: n[-1])):
                 print(f"Loading {i} th note: {note}, alloc: {gc.mem_alloc()}, free: {gc.mem_free()}")
-                self.audio_manager.load_wav(note, self.sampler.get_sample(note).tobytes())
+                self.audio_manager.load_wav(note, self.sampler.get_sample(note, duration=2.0).tobytes())
                 # micropython.mem_info()
                 gc.collect()
         else:
@@ -343,7 +343,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                         keycode=getattr(KeyCode, physical_key.key_name, None),
                         physical_key=physical_key,
                         pressed_function=partial(self.audio_manager.play_note, self.music_mapping[physical_key.key_name]),
-                        released_function=partial(self.audio_manager.stop_note, self.music_mapping[physical_key.key_name]),
+                        released_function=partial(self.audio_manager.stop_note, self.music_mapping[physical_key.key_name], delay=500),
                     )
                 else:
                     virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key)
@@ -363,7 +363,7 @@ def screen():  # TODO: build screen manager
         rotation=1,
     )
 
-    names = ["MicroKeyBoard", "Piano Mode", "F Major"]
+    names = ["MicroKeyBoard", "Mode", "F Major"]
 
     color_values = (255, 255, 255)
     height_division = tft.height // len(color_values)
@@ -373,6 +373,8 @@ def screen():  # TODO: build screen manager
         for row in range(start_row, end_row):
             rgb_color = [0 if idx != i else int(interpolate(0, color_value, row - start_row, height_division)) for idx in range(3)]
             color = st7789.color565(rgb_color)
+
+        for row in range(start_row, end_row):
             tft.hline(0, row, tft.width, color)
 
         name = names[i]
@@ -385,8 +387,8 @@ def screen():  # TODO: build screen manager
 
 def main():
     time.sleep_ms(1000)
-    micropython.mem_info()
     # virtual_key_board = VirtualKeyBoard()
+
     virtual_key_board = MusicKeyBoard(
         music_mapping_path="config/music_keymap.json",
         mode = "F Major"
