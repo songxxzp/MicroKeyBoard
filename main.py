@@ -74,6 +74,7 @@ class VirtualKey:
         self.released_function = released_function or self.default_released_function
         # TODO: press condition function
         self.bind_physical = None
+        self.press_time = None
         self.pressed = False
         self.update_time = time.time()
 
@@ -102,6 +103,7 @@ class VirtualKey:
 
     def press(self):
         self.pressed = True
+        self.press_time = time.ticks_ms()
         if self.pressed_function:
             pressed_function_result = self.pressed_function()
             if pressed_function_result is None:  # TODO
@@ -278,6 +280,7 @@ class VirtualKeyBoard:
         self.ble_interface = None
         self.set_connection_mode(connection_mode)
 
+        self.pressed_keys: List[VirtualKey] = []
         self.keystates = []
         self.prev_keystates = []
 
@@ -287,9 +290,9 @@ class VirtualKeyBoard:
         if connection_mode == self.connection_mode:
             return
 
-        if connection_mode == "usb_hid":
+        if self.connection_mode == "usb_hid":
             pass
-        elif connection_mode == "bluetooth":
+        elif self.connection_mode == "bluetooth":
             if self.ble_interface is not None:
                 self.ble_interface.stop()
 
@@ -357,11 +360,16 @@ class VirtualKeyBoard:
                 virtual_key.pressed_function = partial(debug_pressed_function, self, virtual_key.pressed_function)
 
     def scan(self, interval_us: int = 1):
-        self.keystates.clear()
         self.phsical_key_board.scan(interval_us=interval_us)
+
+        self.keystates.clear()
+        self.pressed_keys.clear()
         for virtual_key in self.virtual_keys:
             if virtual_key.is_pressed() and virtual_key.keycode is not None:
-                self.keystates.append(virtual_key.keycode)
+                self.pressed_keys.append(virtual_key)
+                # self.keystates.append(virtual_key.keycode)
+        self.pressed_keys.sort(key=lambda k:k.press_time, reverse=True)
+        self.keystates = [k.keycode for k in self.pressed_keys[:6]]
         if self.keystates != self.prev_keystates:
             self.prev_keystates.clear()
             self.prev_keystates.extend(self.keystates)
@@ -407,6 +415,20 @@ class MusicKeyBoard(VirtualKeyBoard):
 
         super().__init__(*args, **kwargs)
 
+    def build_fn_layer(self, virtual_keys: List[VirtualKey]):
+        super().build_fn_layer(virtual_keys)
+        for virtual_key in virtual_keys:
+            if virtual_key.key_name == "AUDIO_CALL":
+                def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        if virtual_key_board.audio_manager.volume_factor > 0:
+                            virtual_key_board.audio_manager.volume_factor = 0
+                        else:
+                            virtual_key_board.audio_manager.volume_factor = 0.1
+                    elif original_func:
+                        original_func()
+                virtual_key.pressed_function = partial(sound_pressed_function, self, virtual_key.pressed_function)
+
     def build_virtual_keys(self):
         virtual_keys: List[VirtualKey] = []
         for physical_key in self.phsical_key_board.physical_keys:
@@ -422,7 +444,8 @@ class MusicKeyBoard(VirtualKeyBoard):
                     def pressed_function(virtual_key: VirtualKey, note: str):
                         virtual_key.playing_wav_id = self.audio_manager.play_note(note)
                     def released_function(virtual_key: VirtualKey):
-                        self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=500)
+                        if hasattr(virtual_key, "playing_wav_id"):
+                            self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=500)
                     virtual_key.pressed_function = partial(pressed_function, virtual_key, self.music_mapping[physical_key.key_name])
                     virtual_key.released_function = partial(released_function, virtual_key)
                 else:
@@ -432,20 +455,7 @@ class MusicKeyBoard(VirtualKeyBoard):
         return virtual_keys
 
 
-def screen():  # TODO: build screen manager
-    tft = st7789.ST7789(
-        SPI(2, baudrate=30000000, sck=Pin(1), mosi=Pin(2), miso=None),
-        135,
-        240,
-        reset=Pin(42, Pin.OUT),
-        cs=Pin(40, Pin.OUT),
-        dc=Pin(41, Pin.OUT),
-        backlight=Pin(39, Pin.OUT),
-        rotation=1,
-    )
-
-    names = ["MicroKeyBoard", "Mode", "F Major"]
-
+def screen(tft, names: List[str] = ["MicroKeyBoard", "Mode", "F Major"]):  # TODO: build screen manager
     color_values = (255, 255, 255)
     height_division = tft.height // len(color_values)
     for i, color_value in enumerate(color_values):
@@ -468,6 +478,17 @@ def screen():  # TODO: build screen manager
 
 def main():
     time.sleep_ms(1000)
+    tft = st7789.ST7789(
+        SPI(2, baudrate=30000000, sck=Pin(1), mosi=Pin(2), miso=None),
+        135,
+        240,
+        reset=Pin(42, Pin.OUT),
+        cs=Pin(40, Pin.OUT),
+        dc=Pin(41, Pin.OUT),
+        backlight=Pin(39, Pin.OUT),
+        rotation=1,
+    )
+    screen(tft,names=["MicroKeyBoard", "MusicMode", "Starting"])
     # virtual_key_board = VirtualKeyBoard()
 
     virtual_key_board = MusicKeyBoard(
@@ -475,7 +496,7 @@ def main():
         mode = "F Major"
     )
     time.sleep_ms(50)
-    tft = screen()
+    screen(tft,names=["MicroKeyBoard", "MusicMode", "F Major"])
     count = 0
     start_time = time.time()
     while True:

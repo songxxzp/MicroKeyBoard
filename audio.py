@@ -373,16 +373,16 @@ class AudioManager:
 
         # Iterate through active voices [loaded_data, current_pos_bytes]
         for voice_info in self.active_voices:
-            if voice_info.finished:
-                print(f"finished '{voice_name}'  at {current_ms}.")
-                continue
-
             loaded_data = voice_info.loaded_data # The bytearray data
             current_pos_bytes = voice_info.current_pos_bytes # Current read position in bytes
             voice_name = voice_info.voice_name
             voice_id = voice_info.voice_id
             start_time = voice_info.start_time
             current_ms = time.ticks_ms()
+
+            if voice_info.finished:
+                print(f"finished '{voice_name}'  at {current_ms}.")
+                continue
 
             if voice_id in self.disabled_voices and self.disabled_voices[voice_id] > start_time and current_ms > self.disabled_voices[voice_id]:
                 voice_info.finished = True
@@ -401,8 +401,9 @@ class AudioManager:
 
                 # Mix into the target buffer using NumPy addition
                 # Ensure slices match size
-                target_buffer_np[:num_read_samples] += temp_int16_chunk[:num_read_samples] // int(1 / self.volume_factor)
-
+                if self.volume_factor > 0:
+                    target_buffer_np[:num_read_samples] += temp_int16_chunk[:num_read_samples] // int(1 / self.volume_factor)
+                
                 total_samples_mixed = max(total_samples_mixed, num_read_samples)  
                 # Update position for this voice (in bytes)
                 voice_info.current_pos_bytes += num_read_bytes
