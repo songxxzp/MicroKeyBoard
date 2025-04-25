@@ -68,6 +68,7 @@ class VirtualKey:
         pressed_function: Optional[Callable] = None,
         released_function: Optional[Callable] = None
     ) -> None:
+        # self.key_id  # TODO
         self.keycode = keycode
         self.key_name = key_name
         self.pressed_function = pressed_function or self.default_pressed_function
@@ -97,9 +98,10 @@ class VirtualKey:
             print(f"virtual({self.keycode}, {self.key_name}) is released.")
 
     # TODO: @property
-    def is_pressed(self):
-        pressed = self.bind_physical.pressed if self.bind_physical is not None else False
-        return pressed
+    # def is_pressed(self):
+    #     return self.pressed
+        # pressed = self.bind_physical.pressed if self.bind_physical is not None else False
+        # return pressed
 
     def press(self):
         self.pressed = True
@@ -126,6 +128,7 @@ class PhysicalKey:
         self.key_id = key_id
         self.key_name = key_name
         self.pressed = False
+        # self.bind_light = None    # TODO: bind led on board
         self.color = (max_light_level, max_light_level, max_light_level)
         self.random_color(max_light_level)
         self.bind_virtual: "VirtualKey" = None
@@ -197,10 +200,23 @@ class PhysicalKeyBoard:
             self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name, max_light_level=max_light_level)
         
         self.led = LEDManager(self.key_config)
-        self.key_states_buffer = [False for _ in range(self.max_keys)]  # Pressed: 1; Released: 0
+
+        # Calculate the number of bytes needed to store max_keys bits
+        self.bytes_needed = (self.max_keys + 7) // 8
+
+        # Double buffer for key states: previous_state and current_state
+        # Each key state is stored as a bit (0 or 1)
+        self._buffer_a = bytearray(self.bytes_needed)
+        self._buffer_b = bytearray(self.bytes_needed)
+
+        # Pointers to the current and previous state buffers
+        self._current_buffer = self._buffer_a
+        self._previous_buffer = self._buffer_b # Initially, both are zero, representing all keys released
         
-    def scan_keys(self, interval_us=1) -> List[bool]:
-        key_states = self.key_states_buffer
+    def scan_keys(self, interval_us=1) -> None:
+        # key_states = self.key_states_view
+        for byte_index in range(self.bytes_needed):
+            self._current_buffer[byte_index] = 0
 
         # Load key state
         self.key_pl.value(0)
@@ -212,46 +228,89 @@ class PhysicalKeyBoard:
         self.key_ce.value(0)
         time.sleep_us(interval_us)
         for i in range(self.max_keys):
-            key_states[i] = not self.key_in.value()
+            # key_states[i] = not self.key_in.value()
+
+            # Determine byte and bit index
+            byte_index = i // 8
+            bit_index = i % 8
+
+            # Read the pin value, invert it (assuming active low)
+            state = int(not self.key_in.value())
+
+            self._current_buffer[byte_index] |= (state << bit_index)
+
             self.key_clk.value(1)
             time.sleep_us(interval_us)
             self.key_clk.value(0)
             time.sleep_us(interval_us)
         self.key_ce.value(1)
-        return key_states
     
-    def scan(self, interval_us=1):
-        key_states = self.scan_keys(interval_us=interval_us)
-        for key_id, key_state in enumerate(key_states):
-            physical_key = self.physical_keys[key_id]
-            if physical_key is None:
-                continue
-            if not physical_key.pressed and key_state:
-                physical_key.pressed = True
-                if DEBUG:
-                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
-                if physical_key.bind_virtual is not None:
-                    physical_key.bind_virtual.press()  # maybe use pressed_function instead?
-                else:
-                    if DEBUG:
-                        print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind")
-            if physical_key.pressed and not key_state:
-                physical_key.pressed = False
-                if DEBUG:
-                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) is released at {time.ticks_ms()}.")
-                if physical_key.bind_virtual is not None:
-                    physical_key.bind_virtual.release()
-                else:
-                    if DEBUG:
-                        print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind")
+    def scan(self, interval_us=1) -> bool:
+        self.scan_keys(interval_us=interval_us)
+        scan_change = False
+        for byte_index in range(self.bytes_needed):
+            current_byte = self._current_buffer[byte_index]
+            previous_byte = self._previous_buffer[byte_index]
+
+            # Find changed bits using XOR: bit is 1 if different, 0 if same
+            changed_bits = current_byte ^ previous_byte
+
+            # If there are any changes in this byte
+            if changed_bits:
+                scan_change = True
+                # Iterate through each bit in the byte (0 to 7)
+                for bit_index in range(8):
+                    # Calculate the global key ID
+                    key_id = byte_index * 8 + bit_index
+
+                    # Stop if we exceed the actual number of keys
+                    if key_id >= self.max_keys:
+                        break # Exit inner loop (bits in byte)
+
+                    # Check if this specific bit (key) changed
+                    if (changed_bits >> bit_index) & 1:
+                        # Get the current state of the key (0 or 1)
+                        current_state = (current_byte >> bit_index) & 1
+
+                        physical_key = self.physical_keys[key_id]
+                        if physical_key is None:
+                            continue
+
+                        # If state changed and current state is 1 (0 -> 1): Key Pressed
+                        if current_state == 1:
+                            # This check should technically not be needed if logic is perfect,
+                            # but good defensive programming.
+                            # if not physical_key.pressed:
+                            physical_key.pressed = True
+                            if 'DEBUG' in globals() and DEBUG:
+                                print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
+                            if physical_key.bind_virtual is not None:
+                                physical_key.bind_virtual.press()
+                            else:
+                                if 'DEBUG' in globals() and DEBUG:
+                                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
+
+                        # If state changed and current state is 0 (1 -> 0): Key Released
+                        else: # current_state must be 0
+                            # This check should technically not be needed
+                            # if physical_key.pressed:
+                            physical_key.pressed = False
+                            if 'DEBUG' in globals() and DEBUG:
+                                print(f"physical({physical_key.key_id}, {physical_key.key_name}) is released at {time.ticks_ms()}.")
+                            if physical_key.bind_virtual is not None:
+                                physical_key.bind_virtual.release()
+                            else:
+                                if 'DEBUG' in globals() and DEBUG:
+                                    print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
+
+        self._previous_buffer, self._current_buffer = self._current_buffer, self._previous_buffer
+        return scan_change
 
     def is_pressed(self) -> bool:
-        key_states = self.scan_keys()
-        for key_id, key_state in enumerate(key_states):
-            physical_key = self.physical_keys[key_id]
-            if physical_key is None:
-                continue
-            if key_state:
+        self.scan_keys()
+        for byte_index in range(self.bytes_needed):
+            current_byte = self._current_buffer[byte_index]
+            if current_byte > 0:
                 return True
         return False
 
@@ -324,6 +383,7 @@ class VirtualKeyBoard:
             if physical_key is not None:
                 virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key, pressed_function=None, released_function=None)
                 virtual_keys.append(virtual_key)
+        self.build_fn_layer(virtual_keys)
         return virtual_keys
 
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
@@ -360,12 +420,14 @@ class VirtualKeyBoard:
                 virtual_key.pressed_function = partial(debug_pressed_function, self, virtual_key.pressed_function)
 
     def scan(self, interval_us: int = 1):
-        self.phsical_key_board.scan(interval_us=interval_us)
+        if not self.phsical_key_board.scan(interval_us=interval_us):
+            return
 
         self.keystates.clear()
         self.pressed_keys.clear()
-        for virtual_key in self.virtual_keys:
-            if virtual_key.is_pressed() and virtual_key.keycode is not None:
+        virtual_keys = self.virtual_keys
+        for virtual_key in virtual_keys:
+            if virtual_key.pressed and virtual_key.keycode is not None:
                 self.pressed_keys.append(virtual_key)
                 # self.keystates.append(virtual_key.keycode)
         self.pressed_keys.sort(key=lambda k:k.press_time, reverse=True)
@@ -488,7 +550,7 @@ def main():
         backlight=Pin(39, Pin.OUT),
         rotation=1,
     )
-    screen(tft,names=["MicroKeyBoard", "MusicMode", "Starting"])
+    screen(tft,names=["MicroKeyBoard", "Music Mode", "Starting"])
     # virtual_key_board = VirtualKeyBoard()
 
     virtual_key_board = MusicKeyBoard(
@@ -496,22 +558,31 @@ def main():
         mode = "F Major"
     )
     time.sleep_ms(50)
-    screen(tft,names=["MicroKeyBoard", "MusicMode", "F Major"])
+    screen(tft,names=["MicroKeyBoard", "Music Mode", "F Major"])
     count = 0
-    start_time = time.time()
+    max_scan_gap = 0
+    start_time = time.ticks_ms()
+    current_time = time.ticks_ms()
     while True:
+        scan_start_time = time.ticks_ms()
         virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
+        # max_scan_gap = max(max_scan_gap, time.ticks_ms() - scan_start_time)
         # time.sleep_ms(1)
-        # count += 1
-        # current_time = time.time()
-        
-        # if current_time - start_time >= 1:
-        #     print(f"scan speed: {count}/s")
-            
-        #     count = 0
-        #     start_time = current_time
+        count += 1
+        max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
+        current_time = time.ticks_ms()
+
+        # if current_time - start_time >= 500:
+        #     gc.collect()
+
+        if current_time - start_time >= 1000:
+            print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
+            count = 0
+            max_scan_gap = 0
+            start_time = current_time
+
         # for color in [st7789.RED, st7789.GREEN, st7789.BLUE]:
         #     for x in range(tft.width):
         #         tft.pixel(x, 0, color)

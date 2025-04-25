@@ -317,6 +317,7 @@ class AudioManager:
         self._is_playing = False
         # Active voices: List of [loaded_data: bytearray, current_pos_bytes: int]
         # Store position in bytes as data is bytearray
+        # TODO: store to slots instead of using list
         self.active_voices: List[Voice] = []
         self.added_voices: List[Voice] = []
         self.disabled_voices: Dict[int, int] = {}
@@ -390,7 +391,8 @@ class AudioManager:
                 continue
 
             # Get memory slice for the current chunk (bytes)
-            chunk_bytes_mv = memoryview(loaded_data)[current_pos_bytes : current_pos_bytes + self.BUFFER_BYTES]
+            # chunk_bytes_mv = memoryview(loaded_data)[current_pos_bytes : current_pos_bytes + self.BUFFER_BYTES]
+            chunk_bytes_mv = loaded_data[current_pos_bytes : current_pos_bytes + self.BUFFER_BYTES]
             num_read_bytes = len(chunk_bytes_mv)
             num_read_samples = num_read_bytes // self.bytes_per_sample if self.bytes_per_sample > 0 else 0
 
@@ -662,5 +664,6 @@ def midi_example():
             print("other event", event)
 
 if __name__ == "__main__":
-    main()
-    # midi_example()
+    # main()
+    midi_example()
+
