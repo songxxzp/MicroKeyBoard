@@ -11,4 +11,7 @@ from machine import Pin
 
 print("Suppressing noise on start.")
 sd_pin: int = 45
-p0 = Pin(0, Pin.OUT, value=0)
+en_pin: int = 38
+
+p0 = Pin(sd_pin, Pin.OUT, value=0)
+en = Pin(en_pin, Pin.OUT, value=0)

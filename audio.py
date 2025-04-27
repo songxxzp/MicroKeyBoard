@@ -258,6 +258,7 @@ class AudioManager:
         sck_pin: int = 48,
         ws_pin: int = 47,
         sd_pin: int = 45,
+        en_pin: int = 38,
         i2s_id: int = 0,
         bits: int = 16,
         format=I2S.MONO,
@@ -274,6 +275,11 @@ class AudioManager:
         self.BUFFER_SAMPLES = buffer_samples
         self.BUFFER_BYTES = self.BUFFER_SAMPLES * 2
         self.always_play = always_play
+
+        if en_pin is None:
+            self.en = None
+        else:
+            self.en = Pin(en_pin, Pin.OUT, value=1)
 
         self.audio_out = I2S(
             i2s_id,
