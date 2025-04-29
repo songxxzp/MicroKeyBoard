@@ -57,6 +57,7 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 
 
 ## Used Libs:
+Download the following libraries and place them into the `libs` folder.
 [st7789py](https://github.com/russhughes/st7789py_mpy)
 
 
