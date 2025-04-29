@@ -45,7 +45,14 @@ class BluetoothKeyboard(object):
 
     def _build_adv_data(self, name: str = None, service_uuids: List[int] = None) -> bytes:
         parts = []
+        # Flags: BLE limited discovery mode, BR/EDR not supported
         parts.append(b'\x02\x01\x06')
+        # Appearance: HID Keyboard (0x03C1)
+        # AD Type 0x19 is Appearance
+        # Length is 2 bytes (0x03C1) + 1 byte (Type) = 3 bytes total.
+        # Value 0x03C1 is little-endian: \xc1\x03
+        parts.append(b'\x03\x19\xc1\x03') # <-- Added this line
+
         if service_uuids:
             for uuid in service_uuids:
                 uuid_bytes = struct.pack('<H', uuid)
@@ -81,8 +88,12 @@ class BluetoothKeyboard(object):
         except Exception as e: print("Failed to load paired devices:", e); return {}
 
     def clear_paired_devices(self) -> None:
-        try: os.remove(self.paired_deivces_path); print("Cleared all paired device records.")
-        except OSError: print("No paired device records to clear.")
+        try: 
+            self.paired_device_keys = {}
+            os.remove(self.paired_deivces_path)
+            print("Cleared all paired device records.")
+        except OSError:
+            print("No paired device records to clear.")
 
     def send_report(self, report: bytes):
         if self.conn_handle is None or self.report_handle is None:
@@ -165,9 +176,13 @@ class BluetoothKeyboard(object):
             key = bytes(key) if key is not None else None
             value = bytes(value) if value is not None else None
             if value is None:
-                self.paired_device_keys.pop((sec_type, key), None); self._save_paired_device(); return True
+                self.paired_device_keys.pop((sec_type, key), None)
+                self._save_paired_device()
+                return True
             else:
-                self.paired_device_keys[(sec_type, key)] = value; self._save_paired_device(); return True
+                self.paired_device_keys[(sec_type, key)] = value
+                self._save_paired_device()
+                return True
         elif event == IRQ_MTU_EXCHANGED:
             conn_handle_mtu, mtu = data
             print(f"_IRQ_MTU_EXCHANGED: new MTU={mtu}")

@@ -3,33 +3,69 @@ import os
 
 from machine import Pin
 from machine import I2S
-from typing import Optional, List, Dict
-from ulab import numpy as np
+from typing import Optional, List, Dict, Tuple
+try:
+    import numpy as np
+except:
+    from ulab import numpy as np
 
 
 class Voice:
-    def __init__(self,
-            voice_id: int,
-            loaded_data,
-            current_pos_bytes: int,
-            voice_name: str,
+    def __init__(
+            self,
+            voice_id: Optional[int] = None,
+            loaded_data: Optional[np.ndarray] = None,
+            current_pos: Optional[int] = None,
+            voice_name: Optional[str] = None,
             start_time: Optional[int] = None,
             finished: bool = False,
-            active: bool = False
+            active: bool = False,
+            valid: bool = True,
         ):
         self.voice_id = voice_id
         self.loaded_data = loaded_data
-        self.current_pos_bytes = current_pos_bytes
+        self.current_pos = current_pos
         self.voice_name = voice_name
         self.start_time = start_time or time.ticks_ms()
         self.finished = finished
         self.active = active
+        self.valid = valid
 
         # TODO:
         # self.sustain: Use algorithm for sustain
         # or
         # self.preload: Preload a portion, then load more during reading
         # stop and decay
+    
+    def reinit(
+            self,
+            voice_id: int,
+            loaded_data: bytes,
+            current_pos: int,
+            voice_name: Optional[str] = None,
+            start_time: Optional[int] = None,
+            finished: bool = False,
+            active: bool = False,
+            valid: bool = True,
+        ):
+        self.voice_id = voice_id
+        self.loaded_data = loaded_data
+        self.current_pos = current_pos
+        self.voice_name = voice_name
+        self.start_time = start_time or time.ticks_ms()
+        self.finished = finished
+        self.active = active
+        self.valid = valid
+
+    def copy(self, voice: "Voice"):
+        self.voice_id = voice.voice_id
+        self.loaded_data = voice.loaded_data
+        self.current_pos = voice.current_pos
+        self.voice_name = voice.voice_name
+        self.start_time = voice.start_time
+        self.finished = voice.finished
+        self.active = voice.active
+        self.valid = voice.valid
 
 
 class Sampler:
@@ -310,25 +346,21 @@ class AudioManager:
         self.buffer_to_play_idx = 0 # Index of buffer to play next
 
         # File Caching
-        self._loaded_wavs = {} # Stores {filepath: bytearray_data}
+        self._loaded_wavs: Dict[str, np.ndarray] = {} # Stores {filepath: bytearray_data}
 
         # Temp buffer for reading from file (bytes) and converting (int16)
-        self.reading_buffer_bytes = bytearray(self.BUFFER_BYTES)
-        self.reading_buffer_mv = memoryview(self.reading_buffer_bytes)
-        # Temporary NumPy buffer to convert file bytes to int16 before mixing
-        self._reading_temp_buffer_int16 = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
-
+        # self.reading_buffer_bytes = bytearray(self.BUFFER_BYTES)
+        # self.reading_buffer_mv = memoryview(self.reading_buffer_bytes)
+        # Temporary NumPy buffer to compute volume
+        self.volume_buffer_int16 = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
+        self.volume_factor_buffer = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
 
         # Playback state
         self._is_playing = False
-        # Active voices: List of [loaded_data: bytearray, current_pos_bytes: int]
-        # Store position in bytes as data is bytearray
-        # TODO: store to slots instead of using list
-        self.active_voices: List[Voice] = []
-        self.added_voices: List[Voice] = []
+        self.active_voices: Tuple[Voice] = tuple([Voice(valid=False) for _ in range(self.max_voices)])
+        self.added_voices: Tuple[Voice] = tuple([Voice(valid=False) for _ in range(self.max_voices)])
         self.disabled_voices: Dict[int, int] = {}
         self.voice_num = 0
-        self._all_voices_fully_processed = True # True when no voices are active
 
         # Simple Delay Effect State - REMOVED
 
@@ -347,10 +379,11 @@ class AudioManager:
             print(f"Loading '{wav_file}'...")
             with open(wav_file, "rb") as f:
                 f.seek(44) # Skip WAV header
-                wav_data = bytearray(f.read())
-
-        self._loaded_wavs[wav_file] = wav_data
-        print(f"Loaded '{wav_file}' ({len(wav_data)} bytes).")
+                wav_data = bytearray(f.read())  # TODO: use readinto
+                # loaded_np_array = np.fromfile(f, dtype=np.int16)
+        loaded_np_array = np.frombuffer(wav_data, dtype=np.int16)
+        self._loaded_wavs[wav_file] = loaded_np_array
+        print(f"Loaded '{wav_file}' ({loaded_np_array.size} np.int16).")
         return wav_data
 
     def unload_wav(self, wav_file: str):
@@ -366,73 +399,80 @@ class AudioManager:
         total_samples_mixed = 0
 
         for voice in self.added_voices:
-            if not (voice.finished or voice.active):
-                self.active_voices.append(voice)
+            if voice.valid and not (voice.finished or voice.active):
+                new_voice_added = False
+                for active_voice in self.active_voices:
+                    if not active_voice.valid:
+                        active_voice.copy(voice)
+                        # print(f"active {active_voice.voice_name}, {active_voice.current_pos}, {active_voice.valid}")
+                        new_voice_added = True
+                        break
+                if not new_voice_added:
+                    print("active_voices fulled")
+                    oldest_voice = self.active_voices[0]
+                    for active_voice in self.active_voices:
+                        if oldest_voice.start_time > active_voice.start_time:
+                            oldest_voice = active_voice
+                    oldest_voice.copy(voice)
+                    new_voice_added = True
                 voice.active = True
 
-        # Max voices check
-        if len(self.active_voices) >= self.max_voices:
-            if self.active_voices:
-                # Oldest voice is [loaded_data, current_pos_bytes]
-                oldest_voice = self.active_voices.pop(0)
-                print(f"pop voice: {oldest_voice.voice_name}")
-                # No file object to close
-
-        # Iterate through active voices [loaded_data, current_pos_bytes]
+        # Iterate through active voices [loaded_data, current_pos]
         for voice_info in self.active_voices:
+            if not voice_info.valid:
+                continue
             loaded_data = voice_info.loaded_data # The bytearray data
-            current_pos_bytes = voice_info.current_pos_bytes # Current read position in bytes
-            voice_name = voice_info.voice_name
+            current_pos = voice_info.current_pos # Current read position in bytes
             voice_id = voice_info.voice_id
             start_time = voice_info.start_time
             current_ms = time.ticks_ms()
 
             if voice_info.finished:
-                print(f"finished '{voice_name}'  at {current_ms}.")
+                print(f"finished '{voice_id}'  at {current_ms}.")
                 continue
 
             if voice_id in self.disabled_voices and self.disabled_voices[voice_id] > start_time and current_ms > self.disabled_voices[voice_id]:
                 voice_info.finished = True
-                print(f"stopping '{voice_name}, {voice_id}'  at {current_ms}.")
+                print(f"stopping '{voice_id}, {voice_id}'  at {current_ms}.")
                 continue
 
-            # Get memory slice for the current chunk (bytes)
-            # chunk_bytes_mv = memoryview(loaded_data)[current_pos_bytes : current_pos_bytes + self.BUFFER_BYTES]
-            chunk_bytes_mv = loaded_data[current_pos_bytes : current_pos_bytes + self.BUFFER_BYTES]
-            num_read_bytes = len(chunk_bytes_mv)
-            num_read_samples = num_read_bytes // self.bytes_per_sample if self.bytes_per_sample > 0 else 0
+            # Get memory slice for the current chunk (np.int16)
+            temp_int16_chunk = loaded_data[current_pos: current_pos + self.BUFFER_SAMPLES]
+            num_read_samples = temp_int16_chunk.size
 
             if num_read_samples > 0:
-                # Convert bytes chunk (memoryview) to int16 NumPy array
-                # Assumes np.frombuffer works on memoryview
-                temp_int16_chunk = np.frombuffer(chunk_bytes_mv, dtype=np.int16)
-
                 # Mix into the target buffer using NumPy addition
                 # Ensure slices match size
                 if self.volume_factor > 0:
-                    target_buffer_np[:num_read_samples] += temp_int16_chunk[:num_read_samples] // int(1 / self.volume_factor)
-                
+                    self.volume_buffer_int16[:] = 0
+                    self.volume_buffer_int16 += temp_int16_chunk
+                    self.volume_factor_buffer[:] = int(1 / self.volume_factor)
+                    self.volume_buffer_int16 //= self.volume_factor_buffer
+                    target_buffer_np += self.volume_buffer_int16
+
                 total_samples_mixed = max(total_samples_mixed, num_read_samples)  
                 # Update position for this voice (in bytes)
-                voice_info.current_pos_bytes += num_read_bytes
+                voice_info.current_pos += num_read_samples
 
             # Check if this voice finished reading (reached end of loaded data)
-            if current_pos_bytes + num_read_bytes >= len(loaded_data):
+            if current_pos + num_read_samples >= len(loaded_data):
+                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, len(loaded_data))}")
                 voice_info.finished = True
 
         # Remove finished voices
-        self.active_voices = [voice for voice in self.active_voices if not voice.finished]
+        for active_voice in self.active_voices:
+            if active_voice.finished:
+                active_voice.valid = False
 
         self.valid_samples[buffer_idx] = total_samples_mixed
-        self._all_voices_fully_processed = not self.active_voices
 
         # Apply Clipping to the mixed buffer (NumPy)
-        if total_samples_mixed > 0:
-            # Apply clip to the relevant slice of the target buffer
-            self.audio_buffers[buffer_idx][:total_samples_mixed] = np.clip(
-                self.audio_buffers[buffer_idx][:total_samples_mixed],
-                -32768, 32767 # int16 min/max
-            )
+        # if total_samples_mixed > 0:
+        #     # Apply clip to the relevant slice of the target buffer
+        #     self.audio_buffers[buffer_idx][:total_samples_mixed] = np.clip(
+        #         self.audio_buffers[buffer_idx][:total_samples_mixed],
+        #         -32768, 32767 # int16 min/max
+        #     )
 
     def _i2s_callback(self, caller):
         """I2S IRQ Callback."""
@@ -450,7 +490,6 @@ class AudioManager:
         # Write the prepared buffer to I2S if it has data
         if samples_to_play > 0:
             # Convert NumPy int16 slice to bytes
-            # Assumes ndarray.tobytes() exists
             byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
             self.audio_out.write(byte_data)
             write_tiggered = True
@@ -471,7 +510,7 @@ class AudioManager:
         # Stops if _is_playing is False or if all voices processed AND the buffer just played was empty
         if self.always_play:
             assert write_tiggered, "write not triggered!"
-        elif not (len(self.active_voices) > 0 or write_tiggered):
+        elif not (any(voice.valid for voice in self.active_voices) > 0 or write_tiggered):
             self.stop_all()
         elif not write_tiggered:
             print(f"Nothing write to I2S, retriggering...")
@@ -492,18 +531,35 @@ class AudioManager:
 
         # Add new voice with loaded data and start position 0
         # Position is in bytes
-        self.added_voices = [voice for voice in self.added_voices if not (voice.active or voice.finished)]
-        voice = Voice(self.voice_num, loaded_data, 0, nickname or wav_file, time.ticks_ms())
-        self.added_voices.append(voice)
-        self.voice_num += 1
-        if playtime is not None:
-            self.disabled_voices[voice.voice_id] = time.ticks_ms() + playtime
-        print(f"starting '{wav_file}' at {time.ticks_ms()}.")
+        for voice in self.added_voices:
+            if voice.active or voice.finished:
+                voice.valid = False
+        new_voice_id = self.voice_num
+        new_voice_added = False
+        for voice in self.added_voices:
+            if not voice.valid:
+                voice.reinit(
+                    new_voice_id, loaded_data, 0, nickname or wav_file, time.ticks_ms(), valid=True
+                )
+                self.voice_num += 1
+                if playtime is not None:
+                    self.disabled_voices[voice.voice_id] = time.ticks_ms() + playtime
+                print(f"starting '{voice.voice_name}' at {time.ticks_ms()}.")
+                new_voice_added = True
+                break
+        if not new_voice_added:
+            oldest_voice = self.added_voices[0]
+            for voice in self.added_voices:
+                if oldest_voice.start_time > voice.start_time:
+                    oldest_voice = voice
+            oldest_voice.reinit(
+                new_voice_id, loaded_data, 0, nickname or wav_file, time.ticks_ms(), valid=True
+            )
+            new_voice_added = True
 
         # If not playing, start the process
         if not self._is_playing:
             self._is_playing = True
-            self._all_voices_fully_processed = False
 
             # Prepare the initial two buffers (in main thread)
             # self._prepare_buffer(0) # blanck buffer
@@ -515,17 +571,17 @@ class AudioManager:
             self.buffer_to_play_idx = 1 # Next IRQ plays buffer 1
             # self.buffer_to_play_idx = 0
             # self._i2s_callback(self)
-        return voice.voice_id
+        return new_voice_id
 
     def stop_note(self, wav_file: Optional[str] = None, wav_id: Optional[int] = None, delay: Optional[int] = None):
         if wav_id is not None:
             self.disabled_voices[wav_id] = time.ticks_ms() + (delay or 0)
         elif wav_file is not None:
             for voice in self.added_voices:
-                if voice.voice_name == wav_file:
+                if voice.valid and voice.voice_name == wav_file:
                     self.disabled_voices[voice.voice_id] = time.ticks_ms() + (delay or 0)
             for voice in self.active_voices:
-                if voice.voice_name == wav_file:
+                if voice.valid and voice.voice_name == wav_file:
                     self.disabled_voices[voice.voice_id] = time.ticks_ms() + (delay or 0)
         else:
             raise ValueError("wav_file is None and wav_id is None")
@@ -540,21 +596,21 @@ class AudioManager:
             self._is_playing = False
 
             # Active voices only contain data and position
-            self.active_voices.clear()
+            # self.active_voices.clear()
+            for voice in self.active_voices:
+                voice.valid = False
             self.disabled_voices.clear()
             for voice in self.added_voices:
-                assert voice.active, f"Voice not actived before stop: {voice.voice_name}"
-            self.added_voices.clear()
+                if voice.valid:
+                    assert voice.active, f"Voice not actived before stop: {voice.voice_name}"
+                voice.valid = False
+            # self.added_voices.clear()
 
             # Reset buffer state (NumPy buffers)
             self.audio_buffers[0][:] = 0
             self.audio_buffers[1][:] = 0
             self.valid_samples = [0, 0]
             self.buffer_to_play_idx = 0
-            self._all_voices_fully_processed = True
-
-            # Reset delay effect state - REMOVED
-
 
     def get_is_playing(self):
         """Returns True if playback is active."""
@@ -670,6 +726,7 @@ def midi_example():
             print("other event", event)
 
 if __name__ == "__main__":
-    # main()
-    midi_example()
+    main()
+    # midi_example()
+
 

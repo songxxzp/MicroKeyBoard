@@ -1,0 +1,12 @@
+{
+    "layers": {
+        "0": {
+            "INSERT": "ESCAPE",
+            "ESCAPE": "GRAVE",
+            "PAGEUP": "HOME",
+            "PAGEDOWN": "END",
+            "LEFT_SPACE": "SPACE",
+            "RIGHT_SPACE": "SPACE"
+        }
+    }
+}

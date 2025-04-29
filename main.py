@@ -185,7 +185,7 @@ class PhysicalKeyBoard:
         max_light_level = max_light_level or self.key_config.get("max_light_level", None)
     
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
-        self.key_ce = Pin(ce_pin, Pin.OUT, value=1)
+        self.key_ce = Pin(ce_pin, Pin.OUT, value=0)
         self.key_clk = Pin(clock_pin, Pin.OUT, value=0)
         self.key_in = Pin(read_pin, Pin.IN)
         self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
@@ -225,8 +225,8 @@ class PhysicalKeyBoard:
         time.sleep_us(interval_us)
         
         # read key states
-        self.key_ce.value(0)
-        time.sleep_us(interval_us)
+        # self.key_ce.value(0)
+        # time.sleep_us(interval_us)
         for i in range(self.max_keys):
             # key_states[i] = not self.key_in.value()
 
@@ -243,7 +243,7 @@ class PhysicalKeyBoard:
             time.sleep_us(interval_us)
             self.key_clk.value(0)
             time.sleep_us(interval_us)
-        self.key_ce.value(1)
+        # self.key_ce.value(1)
     
     def scan(self, interval_us=1) -> bool:
         self.scan_keys(interval_us=interval_us)
@@ -318,8 +318,7 @@ class PhysicalKeyBoard:
 class VirtualKeyBoard:
     def __init__(self,
         connection_mode: str = "bluetooth",
-        mapping_path: str = "config/mapping.json",
-        fn_mapping_path: str = "config/fn_mapping.json",
+        mapping_path: str = "/config/virtual_keymaps.json",
         key_num: int = 68,  # Real used key num.
         max_phiscal_keys: int = 72,
     ):
@@ -327,6 +326,10 @@ class VirtualKeyBoard:
         self.phsical_key_board = PhysicalKeyBoard(max_keys=max_phiscal_keys)  # TODO: as an arg
         key_num = max(key_num, self.phsical_key_board.used_key_num)
         self.key_num = key_num
+        if exists(mapping_path):
+            self.virtual_key_mappings = json.load(open(mapping_path))
+        else:
+            self.virtual_key_mappings = None
 
         # editable keyboard state
         self.connection_mode = None
@@ -365,7 +368,8 @@ class VirtualKeyBoard:
             self.interface = self.usb_interface
         elif self.connection_mode == "bluetooth":
             print("swiching to ble mode")
-            self.ble_interface = BluetoothKeyboard()
+            if self.ble_interface is None:
+                self.ble_interface = BluetoothKeyboard()
             self.ble_interface.start()
             self.interface = self.ble_interface
         elif self.connection_mode == "debug":
@@ -381,14 +385,20 @@ class VirtualKeyBoard:
         virtual_keys: List[VirtualKey] = []
         for physical_key in self.phsical_key_board.physical_keys:
             if physical_key is not None:
-                virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key, pressed_function=None, released_function=None)
+                key_code_name = physical_key.key_name
+                if self.virtual_key_mappings is not None:
+                    key_code_name = self.virtual_key_mappings["layers"]["0"].get(physical_key.key_name, None) or key_code_name
+                virtual_key = VirtualKey(
+                    key_name=key_code_name,
+                    keycode=getattr(KeyCode, key_code_name, None), physical_key=physical_key, pressed_function=None, released_function=None
+                )
                 virtual_keys.append(virtual_key)
         self.build_fn_layer(virtual_keys)
         return virtual_keys
 
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         for virtual_key in virtual_keys:
-            if virtual_key.key_name == "FN":  # create ".py" file or build from file.
+            if virtual_key.bind_physical.key_name == "FN":  # create ".py" file or build from file.
                 def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
                     print("change to layer 1")
                     virtual_key_board.layer = 1
@@ -397,27 +407,35 @@ class VirtualKeyBoard:
                     virtual_key_board.layer = 0
                 virtual_key.pressed_function = partial(fn_pressed_function, self)
                 virtual_key.released_function = partial(fn_released_function, self)
-            if virtual_key.key_name == "Q":
+            if virtual_key.bind_physical.key_name == "Q":
                 def ble_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         virtual_key_board.set_connection_mode("bluetooth")
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(ble_pressed_function, self, virtual_key.pressed_function)
-            if virtual_key.key_name == "W":
+            if virtual_key.bind_physical.key_name == "W":
                 def usb_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         virtual_key_board.set_connection_mode("usb_hid")
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(usb_pressed_function, self, virtual_key.pressed_function)
-            if virtual_key.key_name == "E":
+            if virtual_key.bind_physical.key_name == "E":
                 def debug_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         virtual_key_board.set_connection_mode("debug")
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(debug_pressed_function, self, virtual_key.pressed_function)
+            if virtual_key.bind_physical.key_name == "R":
+                def clear_ble_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        if self.ble_interface:
+                            self.ble_interface.clear_paired_devices()
+                    elif original_func:
+                        original_func()
+                virtual_key.pressed_function = partial(clear_ble_pressed_function, self, virtual_key.pressed_function)
 
     def scan(self, interval_us: int = 1):
         if not self.phsical_key_board.scan(interval_us=interval_us):
@@ -480,7 +498,7 @@ class MusicKeyBoard(VirtualKeyBoard):
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         super().build_fn_layer(virtual_keys)
         for virtual_key in virtual_keys:
-            if virtual_key.key_name == "AUDIO_CALL":
+            if virtual_key.bind_physical.key_name in ["AUDIO_CALL", "M"]:
                 def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         if virtual_key_board.audio_manager.volume_factor > 0:
@@ -495,10 +513,13 @@ class MusicKeyBoard(VirtualKeyBoard):
         virtual_keys: List[VirtualKey] = []
         for physical_key in self.phsical_key_board.physical_keys:
             if physical_key is not None:
+                key_code_name = physical_key.key_name
+                if self.virtual_key_mappings is not None:
+                    key_code_name = self.virtual_key_mappings["layers"]["0"].get(physical_key.key_name, None) or key_code_name
                 if physical_key.key_name in self.music_mapping:
                     virtual_key = VirtualKey(
-                        key_name=physical_key.key_name,
-                        keycode=getattr(KeyCode, physical_key.key_name, None),
+                        key_name=key_code_name,
+                        keycode=getattr(KeyCode, key_code_name, None),
                         physical_key=physical_key,
                         pressed_function=None,
                         released_function=None,
@@ -511,7 +532,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                     virtual_key.pressed_function = partial(pressed_function, virtual_key, self.music_mapping[physical_key.key_name])
                     virtual_key.released_function = partial(released_function, virtual_key)
                 else:
-                    virtual_key = VirtualKey(key_name=physical_key.key_name, keycode=getattr(KeyCode, physical_key.key_name, None), physical_key=physical_key)
+                    virtual_key = VirtualKey(key_name=key_code_name, keycode=getattr(KeyCode, key_code_name, None), physical_key=physical_key)
                 virtual_keys.append(virtual_key)
         self.build_fn_layer(virtual_keys)
         return virtual_keys
