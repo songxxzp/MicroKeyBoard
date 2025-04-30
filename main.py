@@ -11,7 +11,7 @@ from ulab import numpy as np
 import micropython
 
 from typing import List, Dict, Optional, Callable, Tuple
-from machine import Pin, I2S, SPI
+from machine import Pin, I2S, SPI, SoftSPI
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
 import st7789py as st7789
@@ -169,7 +169,8 @@ class PhysicalKeyBoard:
         wakeup_pin: Optional[int] = None,
         max_keys: Optional[int] = None,  # The maximum number of keys for key scanning. The actual number of keys used is less than or equal to this number.
         keymap_path: Optional[str] = None,  # "/config/physical_keymap.json",
-        max_light_level: Optional[int] = None
+        max_light_level: Optional[int] = None,
+        scan_mode: Optional[int] = None,
     ):
         self.key_config = json.load(open(key_config_path))
 
@@ -183,13 +184,41 @@ class PhysicalKeyBoard:
         max_keys = max_keys or self.key_config.get("max_keys", None)
         keymap_path = keymap_path or self.key_config.get("keymap_path", None)
         max_light_level = max_light_level or self.key_config.get("max_light_level", None)
+        self.scan_mode = scan_mode or self.key_config.get("scan_mode", None)
     
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
         self.key_ce = Pin(ce_pin, Pin.OUT, value=0)
-        self.key_clk = Pin(clock_pin, Pin.OUT, value=0)
-        self.key_in = Pin(read_pin, Pin.IN)
         self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
         self.wakeup_pin = Pin(wakeup_pin, Pin.IN) if wakeup_pin is not None else None
+        if self.scan_mode == "SPI":
+            self.key_clk = Pin(clock_pin)
+            self.key_in = Pin(read_pin)
+            self.spi = SPI(
+                1,
+                baudrate=1000000,
+                sck=self.key_clk,
+                mosi=None,
+                miso=self.key_in,
+                polarity=1,
+                firstbit=SPI.LSB
+            )
+        elif self.scan_mode == "SoftSPI":
+            self.key_clk = Pin(clock_pin)
+            self.key_in = Pin(read_pin)
+            self.spi = SoftSPI(
+                baudrate=100000,
+                sck=self.key_clk,
+                mosi=Pin(0),
+                miso=self.key_in,
+                polarity=1,
+                firstbit=SoftSPI.LSB
+            )
+        elif self.scan_mode == "GPIO":
+            self.key_clk = Pin(clock_pin, Pin.OUT, value=0)
+            self.key_in = Pin(read_pin, Pin.IN)
+            self.spi = None
+        else:
+            raise NotImplementedError(f"scan mode not implemented: {self.scan_mode}")
 
         self.max_keys = max_keys
         self.physical_keys = [None for _ in range(max_keys)]
@@ -208,6 +237,9 @@ class PhysicalKeyBoard:
         # Each key state is stored as a bit (0 or 1)
         self._buffer_a = bytearray(self.bytes_needed)
         self._buffer_b = bytearray(self.bytes_needed)
+        for byte_index in range(self.bytes_needed):
+            self._buffer_a[byte_index] = 0xff
+            self._buffer_b[byte_index] = 0xff
 
         # Pointers to the current and previous state buffers
         self._current_buffer = self._buffer_a
@@ -215,37 +247,41 @@ class PhysicalKeyBoard:
         
     def scan_keys(self, interval_us=1) -> None:
         # key_states = self.key_states_view
-        for byte_index in range(self.bytes_needed):
-            self._current_buffer[byte_index] = 0
 
         # Load key state
         self.key_pl.value(0)
         time.sleep_us(interval_us)
         self.key_pl.value(1)
         time.sleep_us(interval_us)
-        
-        # read key states
-        # self.key_ce.value(0)
-        # time.sleep_us(interval_us)
-        for i in range(self.max_keys):
-            # key_states[i] = not self.key_in.value()
 
-            # Determine byte and bit index
-            byte_index = i // 8
-            bit_index = i % 8
+        # TODO: self.scan_mode = spi or gpio
+        if self.scan_mode in ["SPI", "SoftSPI"]:
+            self.spi.readinto(self._current_buffer)
+        else:
+            for byte_index in range(self.bytes_needed):
+                self._current_buffer[byte_index] = 0
+            # read key states
+            # self.key_ce.value(0)
+            # time.sleep_us(interval_us)
+            for i in range(self.max_keys):
+                # key_states[i] = not self.key_in.value()
 
-            # Read the pin value, invert it (assuming active low)
-            state = int(not self.key_in.value())
+                # Determine byte and bit index
+                byte_index = i // 8
+                bit_index = i % 8
 
-            self._current_buffer[byte_index] |= (state << bit_index)
+                # Read the pin value
+                state = int(self.key_in.value())
 
-            self.key_clk.value(1)
-            time.sleep_us(interval_us)
-            self.key_clk.value(0)
-            time.sleep_us(interval_us)
-        # self.key_ce.value(1)
+                self._current_buffer[byte_index] |= (state << bit_index)
+
+                self.key_clk.value(1)
+                time.sleep_us(interval_us)
+                self.key_clk.value(0)
+                time.sleep_us(interval_us)
+            # self.key_ce.value(1)
     
-    def scan(self, interval_us=1) -> bool:
+    def scan(self, interval_us=1) -> bool:  # TODO: filter
         self.scan_keys(interval_us=interval_us)
         scan_change = False
         for byte_index in range(self.bytes_needed):
@@ -276,8 +312,8 @@ class PhysicalKeyBoard:
                         if physical_key is None:
                             continue
 
-                        # If state changed and current state is 1 (0 -> 1): Key Pressed
-                        if current_state == 1:
+                        # If state changed and current state is 0 (1 -> 0): Key Pressed
+                        if current_state == 0:
                             # This check should technically not be needed if logic is perfect,
                             # but good defensive programming.
                             # if not physical_key.pressed:
@@ -290,8 +326,8 @@ class PhysicalKeyBoard:
                                 if 'DEBUG' in globals() and DEBUG:
                                     print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
 
-                        # If state changed and current state is 0 (1 -> 0): Key Released
-                        else: # current_state must be 0
+                        # If state changed and current state is 1 (0 -> 1): Key Released
+                        else: # current_state must be 1
                             # This check should technically not be needed
                             # if physical_key.pressed:
                             physical_key.pressed = False
@@ -310,7 +346,8 @@ class PhysicalKeyBoard:
         self.scan_keys()
         for byte_index in range(self.bytes_needed):
             current_byte = self._current_buffer[byte_index]
-            if current_byte > 0:
+            if current_byte < 0xff:
+                print(f"Is pressed: {byte_index}, {current_byte}")
                 return True
         return False
 
@@ -390,7 +427,10 @@ class VirtualKeyBoard:
                     key_code_name = self.virtual_key_mappings["layers"]["0"].get(physical_key.key_name, None) or key_code_name
                 virtual_key = VirtualKey(
                     key_name=key_code_name,
-                    keycode=getattr(KeyCode, key_code_name, None), physical_key=physical_key, pressed_function=None, released_function=None
+                    keycode=getattr(KeyCode, key_code_name, None),
+                    physical_key=physical_key,
+                    pressed_function=None,
+                    released_function=None
                 )
                 virtual_keys.append(virtual_key)
         self.build_fn_layer(virtual_keys)
@@ -398,7 +438,8 @@ class VirtualKeyBoard:
 
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         for virtual_key in virtual_keys:
-            if virtual_key.bind_physical.key_name == "FN":  # create ".py" file or build from file.
+            physical_key = virtual_key.bind_physical
+            if physical_key.key_name == "FN":  # create ".py" file or build from file.
                 def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
                     print("change to layer 1")
                     virtual_key_board.layer = 1
@@ -407,28 +448,28 @@ class VirtualKeyBoard:
                     virtual_key_board.layer = 0
                 virtual_key.pressed_function = partial(fn_pressed_function, self)
                 virtual_key.released_function = partial(fn_released_function, self)
-            if virtual_key.bind_physical.key_name == "Q":
+            elif physical_key.key_name == "Q":
                 def ble_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         virtual_key_board.set_connection_mode("bluetooth")
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(ble_pressed_function, self, virtual_key.pressed_function)
-            if virtual_key.bind_physical.key_name == "W":
+            elif physical_key.key_name == "W":
                 def usb_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         virtual_key_board.set_connection_mode("usb_hid")
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(usb_pressed_function, self, virtual_key.pressed_function)
-            if virtual_key.bind_physical.key_name == "E":
+            elif physical_key.key_name == "E":
                 def debug_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         virtual_key_board.set_connection_mode("debug")
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(debug_pressed_function, self, virtual_key.pressed_function)
-            if virtual_key.bind_physical.key_name == "R":
+            elif physical_key.key_name == "R":
                 def clear_ble_pressed_function(virtual_key_board: "VirtualKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         if self.ble_interface:
@@ -436,6 +477,20 @@ class VirtualKeyBoard:
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(clear_ble_pressed_function, self, virtual_key.pressed_function)
+            elif self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"]["1"]:
+                layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
+                layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None))
+                def fn_layer_pressed_function(virtual_key_board: "VirtualKeyBoard", virtual_key: "VirtualKey", layer_codes: Tuple[str], original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        virtual_key.keycode = layer_codes[1]
+                    elif original_func:
+                        original_func()
+                def fn_layer_released_function(virtual_key: "VirtualKey", layer_codes: Tuple[str], original_func: Callable = None):
+                    virtual_key.keycode = layer_codes[0]
+                    if original_func:
+                        original_func()
+                virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function)
+                virtual_key.released_function = partial(fn_layer_released_function, virtual_key, layer_codes, virtual_key.released_function)
 
     def scan(self, interval_us: int = 1):
         if not self.phsical_key_board.scan(interval_us=interval_us):
@@ -498,7 +553,8 @@ class MusicKeyBoard(VirtualKeyBoard):
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         super().build_fn_layer(virtual_keys)
         for virtual_key in virtual_keys:
-            if virtual_key.bind_physical.key_name in ["AUDIO_CALL", "M"]:
+            physical_key = virtual_key.bind_physical
+            if physical_key.key_name in ["AUDIO_CALL", "M"]:
                 def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         if virtual_key_board.audio_manager.volume_factor > 0:
@@ -562,7 +618,7 @@ def screen(tft, names: List[str] = ["MicroKeyBoard", "Mode", "F Major"]):  # TOD
 def main():
     time.sleep_ms(1000)
     tft = st7789.ST7789(
-        SPI(2, baudrate=30000000, sck=Pin(1), mosi=Pin(2), miso=None),
+        SPI(2, baudrate=40000000, sck=Pin(1), mosi=Pin(2), miso=None),
         135,
         240,
         reset=Pin(42, Pin.OUT),
@@ -572,12 +628,13 @@ def main():
         rotation=1,
     )
     screen(tft,names=["MicroKeyBoard", "Music Mode", "Starting"])
-    # virtual_key_board = VirtualKeyBoard()
+    virtual_key_board = VirtualKeyBoard()
 
-    virtual_key_board = MusicKeyBoard(
-        music_mapping_path="config/music_keymap.json",
-        mode = "F Major"
-    )
+    # virtual_key_board = MusicKeyBoard(
+    #     music_mapping_path="/config/music_keymap.json",
+    #     mode = "F Major"
+    # )
+
     time.sleep_ms(50)
     screen(tft,names=["MicroKeyBoard", "Music Mode", "F Major"])
     count = 0

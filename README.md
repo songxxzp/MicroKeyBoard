@@ -57,10 +57,15 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 
 
 ## Used Libs:
-Download the following libraries and place them into the `libs` folder.
-[st7789py](https://github.com/russhughes/st7789py_mpy)
+Download the following libraries and place them into the `lib` folder:
 
+### [micropython-lib](https://github.com/micropython/micropython-lib)
+- [usb](https://github.com/micropython/micropython-lib/tree/master/micropython/usb)
 
-## Acknowledgement:
-[russhughes/st7789py_mpy](https://github.com/russhughes/st7789py_mpy)
+### [st7789py](https://github.com/russhughes/st7789py_mpy)
+- [st7789py.py](https://github.com/russhughes/st7789py_mpy/blob/master/lib/st7789py.py)
+- [vga2_bold_16x32.py](https://github.com/russhughes/st7789py_mpy/blob/master/romfonts/vga2_bold_16x32.py)
 
+### [typing](https://github.com/Josverl/micropython-stubs)
+- [typing.mpy](https://github.com/Josverl/micropython-stubs/blob/main/mip/typing.mpy)
+- [typing_extensions.mpy](https://github.com/Josverl/micropython-stubs/blob/main/mip/typing_extensions.mpy)

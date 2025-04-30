@@ -7,6 +7,12 @@
             "PAGEDOWN": "END",
             "LEFT_SPACE": "SPACE",
             "RIGHT_SPACE": "SPACE"
+        },
+        "1": {
+            "INSERT": "PRINTSCREEN",
+            "ESCAPE": "ESCAPE",
+            "PAGEUP": "PAGEUP",
+            "PAGEDOWN": "PAGEDOWN"
         }
     }
 }

@@ -1,5 +1,6 @@
 {
     "ktype": "74hc165",
+    "scan_mode": "SPI",
     "clock_pin": 14,
     "pl_pin": 11,
     "ce_pin": 13,
