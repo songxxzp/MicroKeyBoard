@@ -72,7 +72,6 @@ class Sampler:
     def __init__(self,
         sample_dir : str,
         rate : int = 16000,
-        cache_dir : Optional[str] = None
     ):
         """
         Initialize the sampler
@@ -83,7 +82,6 @@ class Sampler:
         self.rate = rate
         self.samples = {}  # Store sample filepath
         self.keys = []     # Store the keys (pitches) of the sample notes
-        self.cache_dir = cache_dir
         self.load_samples()
 
     def load_sample(self, filename, duration: Optional[float] = None):

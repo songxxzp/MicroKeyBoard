@@ -69,3 +69,5 @@ Download the following libraries and place them into the `lib` folder:
 ### [typing](https://github.com/Josverl/micropython-stubs)
 - [typing.mpy](https://github.com/Josverl/micropython-stubs/blob/main/mip/typing.mpy)
 - [typing_extensions.mpy](https://github.com/Josverl/micropython-stubs/blob/main/mip/typing_extensions.mpy)
+
+### [micropython-ulab](https://github.com/v923z/micropython-ulab)

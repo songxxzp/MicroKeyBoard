@@ -1,12 +1,10 @@
-import _thread
+import os
 import time
 import json
 import random
 import neopixel
 import usb.device
 import gc
-import array
-import asyncio
 from ulab import numpy as np
 import micropython
 
@@ -20,7 +18,7 @@ import vga2_bold_16x32 as font
 from audio import AudioManager, Sampler
 from graphics import interpolate
 from bluetoothkeyboard import BluetoothKeyboard
-from utils import partial, exists
+from utils import partial, exists, makedirs, check_disk_space
 
 
 DEBUG = True
@@ -255,7 +253,7 @@ class PhysicalKeyBoard:
         time.sleep_us(interval_us)
 
         # TODO: self.scan_mode = spi or gpio
-        if self.scan_mode in ["SPI", "SoftSPI"]:
+        if self.scan_mode in ("SPI", "SoftSPI"):
             self.spi.readinto(self._current_buffer)
         else:
             for byte_index in range(self.bytes_needed):
@@ -519,6 +517,8 @@ class MusicKeyBoard(VirtualKeyBoard):
         music_mapping_path: str,
         audio_manager: Optional[AudioManager] = None,
         mode: str = "C Major",
+        note_wav_path: str = "/wav/piano/16000",
+        note_cache_path: Optional[str] = "/cache/piano/16000",
         *args,
         **kwargs
     ):
@@ -533,14 +533,25 @@ class MusicKeyBoard(VirtualKeyBoard):
                     volume_factor=0.1
                 )
             self.audio_manager = audio_manager
-            self.sampler = Sampler("/wav/piano/16000")
+            self.sampler = Sampler(note_wav_path)
             self.music_mappings = json.load(open(self.music_mapping_path))
             self.mode = mode
             self.music_mapping = self.music_mappings[mode]
             micropython.mem_info()
+            if note_cache_path is not None and not exists(note_cache_path):
+                makedirs(note_cache_path)
             for i, note in enumerate(sorted(list(self.music_mapping.values()), key=lambda n: n[-1])):
                 print(f"Loading {i} th note: {note}, alloc: {gc.mem_alloc()}, free: {gc.mem_free()}")
-                self.audio_manager.load_wav(note, self.sampler.get_sample(note, duration=2.0).tobytes())
+                if note_cache_path is not None:
+                    if exists(f"{note_cache_path}/{note}"):
+                        wav_data = open(f"{note_cache_path}/{note}", "rb").read()
+                    else:
+                        wav_data = self.sampler.get_sample(note, duration=2.0).tobytes()
+                        with open(f"{note_cache_path}/{note}", "wb") as f:
+                            f.write(wav_data)
+                else:
+                    wav_data = self.sampler.get_sample(note, duration=2.0).tobytes()
+                self.audio_manager.load_wav(note, wav_data)
                 # micropython.mem_info()
                 gc.collect()
         else:
@@ -616,6 +627,7 @@ def screen(tft, names: List[str] = ["MicroKeyBoard", "Mode", "F Major"]):  # TOD
 
 
 def main():
+    check_disk_space()
     time.sleep_ms(1000)
     tft = st7789.ST7789(
         SPI(2, baudrate=40000000, sck=Pin(1), mosi=Pin(2), miso=None),
@@ -628,12 +640,12 @@ def main():
         rotation=1,
     )
     screen(tft,names=["MicroKeyBoard", "Music Mode", "Starting"])
-    virtual_key_board = VirtualKeyBoard()
+    # virtual_key_board = VirtualKeyBoard()
 
-    # virtual_key_board = MusicKeyBoard(
-    #     music_mapping_path="/config/music_keymap.json",
-    #     mode = "F Major"
-    # )
+    virtual_key_board = MusicKeyBoard(
+        music_mapping_path="/config/music_keymap.json",
+        mode = "F Major"
+    )
 
     time.sleep_ms(50)
     screen(tft,names=["MicroKeyBoard", "Music Mode", "F Major"])
@@ -673,4 +685,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
