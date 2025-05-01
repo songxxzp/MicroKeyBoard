@@ -10,6 +10,95 @@ except:
     from ulab import numpy as np
 
 
+def note_to_midinumber(note: str) -> int:
+    """
+    Convert a note name (e.g., A4, C#3) to its MIDI note number.
+
+    Uses Scientific Pitch Notation (A4=440Hz is MIDI 69).
+    C0 is MIDI 12, C-1 is MIDI 0.
+
+    Args:
+        note: Note name string (e.g., "C4", "A#5", "F#3", "C-1").
+
+    Returns:
+        Corresponding MIDI note number (0-127 range for standard notes),
+        or -1 if the note format is invalid.
+    """
+    note_map = {'C': 0, 'C#': 1, 'D': 2, 'D#': 3, 'E': 4, 'F': 5, 'F#': 6, 'G': 7, 'G#': 8, 'A': 9, 'A#': 10, 'B': 11}
+
+    base_note = ''
+    octave_str = ''
+    digit_start_index = -1
+
+    # Find the start of the numerical octave part
+    for i in range(len(note)):
+        if note[i].isdigit() or (note[i] == '-' and i + 1 < len(note) and note[i+1].isdigit()):
+            digit_start_index = i
+            break
+
+    # Check if parsing found an octave part
+    if digit_start_index == -1:
+        return -1 # Invalid format
+
+    base_note = note[:digit_start_index]
+    octave_str = note[digit_start_index:]
+
+    # Check if base note is valid
+    if base_note not in note_map:
+        return -1 # Invalid base note name
+
+    # Check if octave string is a valid integer
+    try:
+        octave = int(octave_str)
+    except ValueError:
+        return -1 # Invalid octave number format
+
+    base_note_value = note_map[base_note]
+
+    # Calculate MIDI number
+    # (octave + 1) * 12 maps written octave 0 to MIDI octave 1 (MIDI notes 12-23)
+    # Written octave -1 maps to MIDI octave 0 (MIDI notes 0-11)
+    midi_number = (octave + 1) * 12 + base_note_value
+
+    # Return the calculated number (can be outside 0-127)
+    # If strictly need 0-127, add check: `if not 0 <= midi_number <= 127: return -1`
+    return midi_number
+
+
+def midinumber_to_note(midinumber: int) -> str:
+    """
+    Convert a MIDI note number to its note name (e.g., 69 -> A4).
+
+    Uses Scientific Pitch Notation (A4=440Hz is MIDI 69).
+    C0 is MIDI 12, C-1 is MIDI 0.
+
+    Args:
+        midinumber: MIDI note number (integer).
+
+    Returns:
+        Corresponding note name string (e.g., "A4", "C-1"),
+        or "Out of Range" if the number is outside the standard 0-127 MIDI range.
+    """
+    # Standard MIDI note numbers are 0-127
+    if not 0 <= midinumber <= 127:
+        return "Out of Range"
+
+    # Note names indexed by their value (0-11)
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+    # Calculate the base note value (0-11)
+    base_note_value = midinumber % 12
+
+    # Calculate the written octave number
+    # (midinumber // 12) gives 0 for 0-11, 1 for 12-23 etc., which is the MIDI octave.
+    # Written octave = MIDI octave - 1.
+    written_octave = (midinumber // 12) - 1
+
+    note_name = note_names[base_note_value]
+
+    return f"{note_name}{written_octave}"
+
+
 class Voice:
     def __init__(
             self,
@@ -115,93 +204,6 @@ class Sampler:
                 self.keys.append(note)
         # Sort the notes by pitch (assuming the note format is standard like A3, C4)
         self.keys = sorted(self.keys, key=self.note_to_frequency)
-    
-    def note_to_midinumber(self, note: str) -> int:  # TODO: move this function
-        """
-        Convert a note name (e.g., A4, C#3) to its MIDI note number.
-
-        Uses Scientific Pitch Notation (A4=440Hz is MIDI 69).
-        C0 is MIDI 12, C-1 is MIDI 0.
-
-        Args:
-            note: Note name string (e.g., "C4", "A#5", "F#3", "C-1").
-
-        Returns:
-            Corresponding MIDI note number (0-127 range for standard notes),
-            or -1 if the note format is invalid.
-        """
-        note_map = {'C': 0, 'C#': 1, 'D': 2, 'D#': 3, 'E': 4, 'F': 5, 'F#': 6, 'G': 7, 'G#': 8, 'A': 9, 'A#': 10, 'B': 11}
-
-        base_note = ''
-        octave_str = ''
-        digit_start_index = -1
-
-        # Find the start of the numerical octave part
-        for i in range(len(note)):
-            if note[i].isdigit() or (note[i] == '-' and i + 1 < len(note) and note[i+1].isdigit()):
-                digit_start_index = i
-                break
-
-        # Check if parsing found an octave part
-        if digit_start_index == -1:
-            return -1 # Invalid format
-
-        base_note = note[:digit_start_index]
-        octave_str = note[digit_start_index:]
-
-        # Check if base note is valid
-        if base_note not in note_map:
-            return -1 # Invalid base note name
-
-        # Check if octave string is a valid integer
-        try:
-            octave = int(octave_str)
-        except ValueError:
-            return -1 # Invalid octave number format
-
-        base_note_value = note_map[base_note]
-
-        # Calculate MIDI number
-        # (octave + 1) * 12 maps written octave 0 to MIDI octave 1 (MIDI notes 12-23)
-        # Written octave -1 maps to MIDI octave 0 (MIDI notes 0-11)
-        midi_number = (octave + 1) * 12 + base_note_value
-
-        # Return the calculated number (can be outside 0-127)
-        # If strictly need 0-127, add check: `if not 0 <= midi_number <= 127: return -1`
-        return midi_number
-
-    def midinumber_to_note(self, midinumber: int) -> str:  # TODO: move this function
-        """
-        Convert a MIDI note number to its note name (e.g., 69 -> A4).
-
-        Uses Scientific Pitch Notation (A4=440Hz is MIDI 69).
-        C0 is MIDI 12, C-1 is MIDI 0.
-
-        Args:
-            midinumber: MIDI note number (integer).
-
-        Returns:
-            Corresponding note name string (e.g., "A4", "C-1"),
-            or "Out of Range" if the number is outside the standard 0-127 MIDI range.
-        """
-        # Standard MIDI note numbers are 0-127
-        if not 0 <= midinumber <= 127:
-            return "Out of Range"
-
-        # Note names indexed by their value (0-11)
-        note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-
-        # Calculate the base note value (0-11)
-        base_note_value = midinumber % 12
-
-        # Calculate the written octave number
-        # (midinumber // 12) gives 0 for 0-11, 1 for 12-23 etc., which is the MIDI octave.
-        # Written octave = MIDI octave - 1.
-        written_octave = (midinumber // 12) - 1
-
-        note_name = note_names[base_note_value]
-
-        return f"{note_name}{written_octave}"
 
     def note_to_frequency(self, note: str):
         """
@@ -346,9 +348,6 @@ class AudioManager:
         # File Caching
         self._loaded_wavs: Dict[str, np.ndarray] = {} # Stores {filepath: bytearray_data}
 
-        # Temp buffer for reading from file (bytes) and converting (int16)
-        # self.reading_buffer_bytes = bytearray(self.BUFFER_BYTES)
-        # self.reading_buffer_mv = memoryview(self.reading_buffer_bytes)
         # Temporary NumPy buffer to compute volume
         self.volume_buffer_int16 = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
         self.volume_factor_buffer = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
@@ -443,7 +442,11 @@ class AudioManager:
                 # Ensure slices match size
                 if self.volume_factor > 0:
                     self.volume_buffer_int16[:] = 0
-                    self.volume_buffer_int16 += temp_int16_chunk
+                    if num_read_samples == self.BUFFER_SAMPLES:
+                        self.volume_buffer_int16 += temp_int16_chunk
+                    else:
+                        volume_buffer = self.volume_buffer_int16[:num_read_samples]
+                        volume_buffer += temp_int16_chunk
                     self.volume_factor_buffer[:] = int(1 / self.volume_factor)
                     self.volume_buffer_int16 //= self.volume_factor_buffer
                     target_buffer_np += self.volume_buffer_int16
@@ -464,13 +467,7 @@ class AudioManager:
 
         self.valid_samples[buffer_idx] = total_samples_mixed
 
-        # Apply Clipping to the mixed buffer (NumPy)
-        # if total_samples_mixed > 0:
-        #     # Apply clip to the relevant slice of the target buffer
-        #     self.audio_buffers[buffer_idx][:total_samples_mixed] = np.clip(
-        #         self.audio_buffers[buffer_idx][:total_samples_mixed],
-        #         -32768, 32767 # int16 min/max
-        #     )
+        # TODO: Overflow Clipping
 
     def _i2s_callback(self, caller):
         """I2S IRQ Callback."""
@@ -495,9 +492,6 @@ class AudioManager:
             byte_data = self.audio_buffers[play_idx][:self.BUFFER_BYTES].tobytes()
             self.audio_out.write(byte_data)
             write_tiggered = True
-        # else:
-        #     print(f"Nothing write to I2S, stopping... active_voices: {len(self.active_voices)}, added_voices: {len(self.added_voices)}")
-        #     self.stop_all()
 
         # Update state for the next IRQ
         self.buffer_to_play_idx = prep_idx
@@ -594,7 +588,6 @@ class AudioManager:
             self._is_playing = False
 
             # Active voices only contain data and position
-            # self.active_voices.clear()
             for voice in self.active_voices:
                 voice.valid = False
             self.disabled_voices.clear()
@@ -602,7 +595,6 @@ class AudioManager:
                 if voice.valid:
                     assert voice.active, f"Voice not actived before stop: {voice.voice_name}"
                 voice.valid = False
-            # self.added_voices.clear()
 
             # Reset buffer state (NumPy buffers)
             self.audio_buffers[0][:] = 0
@@ -676,43 +668,59 @@ def main():
 def midi_example():
     import umidiparser
     from umidiparser import MidiFile, MidiEvent
+    from utils import exists
+
     file_path = "fukakai – KAF - Treble - Piano.mid"
 
     time.sleep_ms(1000) # Sleep before starting audio
     audio_manager = AudioManager(
         rate=16000,
-        buffer_samples=512,
-        always_play=False,
+        buffer_samples=1024,
+        ibuf=4096,
+        always_play=True,
         volume_factor=0.1
     )
 
     # Load WAV files into memory first
     print("Loading WAVs...")
     sampler = Sampler("/wav/piano/16000")
+    note_cache_path: Optional[str] = "/cache/piano/16000"
+
     for note in ["C", "D", "E", "F", "G", "A", "A#", "B"]:
         for i in range(2, 7):
-            audio_manager.load_wav(f"{note}{i}", sampler.get_sample(f"{note}{i}", duration=1.8).tobytes())
+            if exists(f"{note_cache_path}/{note}"):
+                wav_data = open(f"{note_cache_path}/{note}", "rb").read()
+            else:
+                wav_data = sampler.get_sample(f"{note}{i}", duration=1.8).tobytes()
+            audio_manager.load_wav(f"{note}{i}", wav_data)
     audio_manager.load_wav("A#1", sampler.get_sample("A#1", duration=1.8).tobytes())
     audio_manager.load_wav("C6", sampler.get_sample("C6", duration=1.8).tobytes())
-    print("Loading complete.")
+    audio_manager.load_wav("D#5", sampler.get_sample("D#5", duration=1.8).tobytes())
+    audio_manager.load_wav("G#5", sampler.get_sample("D#5", duration=1.8).tobytes())
 
-    delta_tick_ms = 0.932835
+    print("Loading complete.")
 
     for event in MidiFile(file_path, reuse_event_object=True).play():
         # .play will sleep, avoiding time drift, before returning the event on time
         # Process the event according to type
         event: MidiEvent
         if event.status == umidiparser.NOTE_ON:
-            note = sampler.midinumber_to_note(event.note)  # TODO: mode
-            if event.delta_miditicks > 1:
-                playtime = int(event.delta_miditicks * delta_tick_ms)
-                print(note, playtime)
+            note = midinumber_to_note(event.note)  # TODO: mode
+            print(note, event)
+            if event.velocity > 1:
+                # playtime = int(event.delta_miditicks * delta_tick_ms)
+                # playtime = event.delta_us // 1000
                 # print(f"NOTE_ON({playtime})", event)
                 # ... start the note with midi number event.note 
-                audio_manager.play_note(note, playtime=playtime)
+                audio_manager.play_note(note)
+                # audio_manager.play_note(note, playtime=playtime)
+            else:
+                audio_manager.stop_note(note, delay=500)
         # on channel event.channel with event.velocity
         elif event.status == umidiparser.NOTE_OFF :
             print("NOTE_OFF", event)
+            note = midinumber_to_note(event.note)  # TODO: mode
+            audio_manager.stop_note(note, delay=500)
             # ... stop the note event.note .
         elif event.status == umidiparser.PROGRAM_CHANGE:
             print("PROGRAM_CHANGE", event)
@@ -724,7 +732,7 @@ def midi_example():
             print("other event", event)
 
 if __name__ == "__main__":
-    main()
-    # midi_example()
+    # main()
+    midi_example()
 
 
