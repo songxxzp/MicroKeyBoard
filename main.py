@@ -193,7 +193,7 @@ class PhysicalKeyBoard:
             self.key_in = Pin(read_pin)
             self.spi = SPI(
                 1,
-                baudrate=1000000,
+                baudrate=4000000,
                 sck=self.key_clk,
                 mosi=None,
                 miso=self.key_in,
@@ -244,18 +244,17 @@ class PhysicalKeyBoard:
         self._previous_buffer = self._buffer_b # Initially, both are zero, representing all keys released
         
     def scan_keys(self, interval_us=1) -> None:
-        # key_states = self.key_states_view
-
-        # Load key state
-        self.key_pl.value(0)
-        time.sleep_us(interval_us)
-        self.key_pl.value(1)
-        time.sleep_us(interval_us)
-
         # TODO: self.scan_mode = spi or gpio
         if self.scan_mode in ("SPI", "SoftSPI"):
+            # Load key state
+            self.key_pl.value(0)
+            self.key_pl.value(1)
             self.spi.readinto(self._current_buffer)
         else:
+            self.key_pl.value(0)
+            time.sleep_us(interval_us)
+            self.key_pl.value(1)
+            time.sleep_us(interval_us)
             for byte_index in range(self.bytes_needed):
                 self._current_buffer[byte_index] = 0
             # read key states

@@ -12,7 +12,19 @@
             "INSERT": "PRINTSCREEN",
             "ESCAPE": "ESCAPE",
             "PAGEUP": "PAGEUP",
-            "PAGEDOWN": "PAGEDOWN"
+            "PAGEDOWN": "PAGEDOWN",
+            "N1": "F1",
+            "N2": "F2",
+            "N3": "F3",
+            "N4": "F4",
+            "N5": "F5",
+            "N6": "F6",
+            "N7": "F7",
+            "N8": "F8",
+            "N9": "F9",
+            "N0": "F10",
+            "MINUS": "F11",
+            "EQUAL": "F12"
         }
     }
 }
