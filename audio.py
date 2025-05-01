@@ -1,9 +1,14 @@
 import time
 import os
 
+import umidiparser
+
 from machine import Pin
 from machine import I2S
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Callable
+from umidiparser import MidiFile, MidiEvent
+
+from utils import exists, partial
 try:
     import numpy as np
 except:
@@ -610,7 +615,57 @@ class AudioManager:
         self.stop_all()
 
 
-# --- Example Usage ---
+class MIDIPlayer():
+    def __init__(
+        self,
+        file_path: str,
+    ):
+        self.events: List[Tuple[int, str, bool]] = []
+        self.idx = 0
+        self.playing = False
+        self.start_time = time.ticks_ms()
+        self.shift_delay_ms = 500
+        self.time_multiplayer = 1.0
+
+        start_time_ms = 0
+        for event in MidiFile(file_path, reuse_event_object=True):
+            delta_ms = event.delta_us // 1000
+            start_time_ms += delta_ms
+            if event.status == umidiparser.NOTE_ON:
+                note = midinumber_to_note(event.note)
+                if event.velocity > 0:
+                    self.events.append((start_time_ms, note, True))
+                else:
+                    self.events.append((start_time_ms, note, False))
+            # on channel event.channel with event.velocity
+            elif event.status == umidiparser.NOTE_OFF :
+                note = midinumber_to_note(event.note)
+                self.events.append((start_time_ms, note, False))
+                # ... stop the note event.note .
+
+    def play(self, play_func: Callable):
+        if self.playing and self.idx < len(self.events):
+            current_time = time.ticks_ms()
+            if current_time - self.start_time >= int(self.events[self.idx][0] * self.time_multiplayer) + self.shift_delay_ms:
+                print(self.events[self.idx])
+                play_func(self.idx, self.events)
+                self.idx += 1
+            return True
+        else:
+            self.playing = False
+        return False
+
+    def start(self):
+        self.playing = True
+
+    def stop(self):
+        self.playing = False
+
+    def reset(self):
+        self.idx = 0
+        self.playing = False
+
+
 def main():
     time.sleep_ms(1000) # Sleep before starting audio
     audio_manager = AudioManager(
@@ -666,11 +721,8 @@ def main():
 
 
 def midi_example():
-    import umidiparser
-    from umidiparser import MidiFile, MidiEvent
-    from utils import exists
-
-    file_path = "fukakai – KAF - Treble - Piano.mid"
+    # file_path = "fukakai – KAF - Treble - Piano.mid"
+    file_path = "fukakai – KAF.mid"
 
     time.sleep_ms(1000) # Sleep before starting audio
     audio_manager = AudioManager(
@@ -687,35 +739,52 @@ def midi_example():
     note_cache_path: Optional[str] = "/cache/piano/16000"
 
     for note in ["C", "D", "E", "F", "G", "A", "A#", "B"]:
-        for i in range(2, 7):
+        for i in range(2, 6):
             if exists(f"{note_cache_path}/{note}"):
                 wav_data = open(f"{note_cache_path}/{note}", "rb").read()
             else:
                 wav_data = sampler.get_sample(f"{note}{i}", duration=1.8).tobytes()
             audio_manager.load_wav(f"{note}{i}", wav_data)
     audio_manager.load_wav("A#1", sampler.get_sample("A#1", duration=1.8).tobytes())
+    audio_manager.load_wav("D#3", sampler.get_sample("D#3", duration=1.8).tobytes())
     audio_manager.load_wav("C6", sampler.get_sample("C6", duration=1.8).tobytes())
+    audio_manager.load_wav("D6", sampler.get_sample("D6", duration=1.8).tobytes())
+    audio_manager.load_wav("E6", sampler.get_sample("E6", duration=1.8).tobytes())
+    audio_manager.load_wav("F6", sampler.get_sample("F6", duration=1.8).tobytes())
     audio_manager.load_wav("D#5", sampler.get_sample("D#5", duration=1.8).tobytes())
     audio_manager.load_wav("G#5", sampler.get_sample("D#5", duration=1.8).tobytes())
 
     print("Loading complete.")
 
+    midi_player = MIDIPlayer(
+        file_path=file_path
+    )
+
+    def play_note(idx: int, events: List[Tuple[int, str, bool]], audio_manager: AudioManager):
+        _, note, play = events[idx]
+        if play:
+            audio_manager.play_note(note)
+        else:
+            audio_manager.stop_note(note, delay=500)
+    play_func = partial(play_note, audio_manager=audio_manager)
+
+    midi_player.start()
+    while True:
+        if not midi_player.play(play_func):
+            break
+
     for event in MidiFile(file_path, reuse_event_object=True).play():
-        # .play will sleep, avoiding time drift, before returning the event on time
-        # Process the event according to type
-        event: MidiEvent
         if event.status == umidiparser.NOTE_ON:
             note = midinumber_to_note(event.note)  # TODO: mode
             print(note, event)
-            if event.velocity > 1:
-                # playtime = int(event.delta_miditicks * delta_tick_ms)
+            if event.velocity > 0:
                 # playtime = event.delta_us // 1000
-                # print(f"NOTE_ON({playtime})", event)
-                # ... start the note with midi number event.note 
                 audio_manager.play_note(note)
+                # time.sleep_us(event.delta_us)
                 # audio_manager.play_note(note, playtime=playtime)
             else:
                 audio_manager.stop_note(note, delay=500)
+                # time.sleep_us(event.delta_us)
         # on channel event.channel with event.velocity
         elif event.status == umidiparser.NOTE_OFF :
             print("NOTE_OFF", event)

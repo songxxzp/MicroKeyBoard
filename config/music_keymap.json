@@ -29,7 +29,10 @@
         "M": "G5",
         "COMMA": "A5",
         "DOT": "B5",
-        "SLASH": "C6"
+        "SLASH": "C6",
+        "OPEN_BRACKET": "D6",
+        "CLOSE_BRACKET": "E6",
+        "QUOTE": "F6"
     },
     "F Major": {
         "Q": "A#1",
@@ -61,7 +64,10 @@
         "M": "G5",
         "COMMA": "A5",
         "DOT": "A#5",
-        "SLASH": "C6"
+        "SLASH": "C6",
+        "OPEN_BRACKET": "D6",
+        "CLOSE_BRACKET": "E6",
+        "QUOTE": "F6"
     },
     "F Major Treble": {
         "Y": "C4",
@@ -78,7 +84,10 @@
         "M": "G5",
         "COMMA": "A5",
         "DOT": "A#5",
-        "SLASH": "C6"
+        "SLASH": "C6",
+        "OPEN_BRACKET": "D6",
+        "CLOSE_BRACKET": "E6",
+        "QUOTE": "F6"
     },
     "F Major Bass": {
         "Q": "A#1",

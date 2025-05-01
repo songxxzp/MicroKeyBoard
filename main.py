@@ -8,14 +8,14 @@ import gc
 from ulab import numpy as np
 import micropython
 
-from typing import List, Dict, Optional, Callable, Tuple
+from typing import List, Dict, Optional, Callable, Tuple, Union
 from machine import Pin, I2S, SPI, SoftSPI
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
 import st7789py as st7789
 import vga2_bold_16x32 as font
 
-from audio import AudioManager, Sampler
+from audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
 from graphics import interpolate
 from bluetoothkeyboard import BluetoothKeyboard
 from utils import partial, exists, makedirs, check_disk_space
@@ -27,7 +27,8 @@ DEBUG = True
 class LEDManager:
     def __init__(
         self,
-        led_config: Dict      
+        led_config: Dict,
+        ledmap: Optional[Dict[str, int]] = {}
     ):
         self.ltype = led_config.get("ltype", "neopixel")
         self.led_pixels = led_config.get("led_pixels", 68)
@@ -35,6 +36,7 @@ class LEDManager:
         self.onstart_light_level = led_config.get("onstart_light_level", 1)
         self.led_data_pin = led_config.get("led_data_pin")
         self.led_power_pin = led_config.get("led_power_pin")
+        self.ledmap = ledmap
         
         self.led_power = Pin(self.led_power_pin, Pin.OUT)
         self.led_power.value(1)
@@ -48,8 +50,10 @@ class LEDManager:
     def led_switch(self, open: bool = True):
         self.led_power.value(open)
 
-    def set_pixel(self, i: int, color: Tuple[int], write: bool = False):
-        self.pixels[i] = (max(l, self.max_light_level) for l in color)
+    def set_pixel(self, i: Union[int, str], color: Tuple[int], write: bool = False):
+        if isinstance(i, str):
+            i = self.ledmap[i]
+        self.pixels[i] = tuple(min(l, self.max_light_level) for l in color)
         if write:
             self.pixels.write()
 
@@ -220,13 +224,17 @@ class PhysicalKeyBoard:
 
         self.max_keys = max_keys
         self.physical_keys = [None for _ in range(max_keys)]
-        self.keymap_dict = json.load(open(keymap_path))
+        keymap_json = json.load(open(keymap_path))
+        if "keymap" in keymap_json:
+            self.keymap_dict = keymap_json["keymap"]
+        else:
+            self.keymap_dict = keymap_json
         self.used_key_num = len(self.keymap_dict)
         assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
         for key_name, key_id in self.keymap_dict.items():
             self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name, max_light_level=max_light_level)
         
-        self.led = LEDManager(self.key_config)
+        self.led_manager = LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
 
         # Calculate the number of bytes needed to store max_keys bits
         self.bytes_needed = (self.max_keys + 7) // 8
@@ -536,7 +544,9 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.music_mappings = json.load(open(self.music_mapping_path))
             self.mode = mode
             self.music_mapping = self.music_mappings[mode]
-            micropython.mem_info()
+
+            self.note_key_mapping = {}
+
             if note_cache_path is not None and not exists(note_cache_path):
                 makedirs(note_cache_path)
             for i, note in enumerate(sorted(list(self.music_mapping.values()), key=lambda n: n[-1])):
@@ -583,6 +593,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                 if self.virtual_key_mappings is not None:
                     key_code_name = self.virtual_key_mappings["layers"]["0"].get(physical_key.key_name, None) or key_code_name
                 if physical_key.key_name in self.music_mapping:
+                    self.note_key_mapping[self.music_mapping[physical_key.key_name]] = physical_key.key_name
                     virtual_key = VirtualKey(
                         key_name=key_code_name,
                         keycode=getattr(KeyCode, key_code_name, None),
@@ -652,8 +663,32 @@ def main():
     max_scan_gap = 0
     start_time = time.ticks_ms()
     current_time = time.ticks_ms()
+
+    for i in range(71):
+        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 0, 0), write=True)
+        time.sleep(0.01)
+
+    midi_player = MIDIPlayer(
+        file_path="fukakai – KAF - Treble - Piano.mid"
+    )
+
+    def play_note(idx: int, events: List[Tuple[int, str, bool]], led_manager: LEDManager, note_key_mapping: Dict[str, str]):
+        _, note, play = events[idx]
+        if note not in note_key_mapping:
+            # raise NotImplementedError(f"{note} not set")
+            print(f"{note} not set")
+            return False
+        if play:
+            led_manager.set_pixel(note_key_mapping[note], (16, 32, 8), write=True)
+        else:
+            led_manager.set_pixel(note_key_mapping[note], (1, 1, 1), write=True)
+    play_func = partial(play_note, led_manager=virtual_key_board.phsical_key_board.led_manager, note_key_mapping=virtual_key_board.note_key_mapping)
+    midi_player.time_multiplayer = 1 / 0.75
+    midi_player.start()
+
     while True:
         scan_start_time = time.ticks_ms()
+        midi_player.play(play_func)
         virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
