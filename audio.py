@@ -656,7 +656,12 @@ class MIDIPlayer():
         return False
 
     def start(self):
+        self.idx = 0
+        self.start_time = time.ticks_ms()
         self.playing = True
+
+    def resume(self):  # TODO
+        pass
 
     def stop(self):
         self.playing = False
@@ -745,8 +750,10 @@ def midi_example():
             else:
                 wav_data = sampler.get_sample(f"{note}{i}", duration=1.8).tobytes()
             audio_manager.load_wav(f"{note}{i}", wav_data)
+    audio_manager.load_wav("A1", sampler.get_sample("A#1", duration=1.8).tobytes())
     audio_manager.load_wav("A#1", sampler.get_sample("A#1", duration=1.8).tobytes())
     audio_manager.load_wav("D#3", sampler.get_sample("D#3", duration=1.8).tobytes())
+    audio_manager.load_wav("D#4", sampler.get_sample("D#4", duration=1.8).tobytes())
     audio_manager.load_wav("C6", sampler.get_sample("C6", duration=1.8).tobytes())
     audio_manager.load_wav("D6", sampler.get_sample("D6", duration=1.8).tobytes())
     audio_manager.load_wav("E6", sampler.get_sample("E6", duration=1.8).tobytes())

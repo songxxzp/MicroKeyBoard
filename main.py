@@ -497,6 +497,25 @@ class VirtualKeyBoard:
                 virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function)
                 virtual_key.released_function = partial(fn_layer_released_function, virtual_key, layer_codes, virtual_key.released_function)
 
+    def bind_fn_layer_func(self, key_name: str, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None):
+        for virtual_key in self.virtual_keys:
+            physical_key = virtual_key.bind_physical
+            if physical_key.key_name == key_name:
+                def fn_layer_pressed_function(virtual_key_board: "VirtualKeyBoard", pressed_function: Callable = None, original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        pressed_function()
+                    elif original_func:
+                        original_func()
+                def fn_layer_released_function(virtual_key_board: "VirtualKeyBoard", released_function: Callable, original_func: Callable = None):
+                    if virtual_key_board.layer == 1:
+                        released_function()
+                    elif original_func:
+                        original_func()
+                if pressed_function is not None:
+                    virtual_key.pressed_function = partial(fn_layer_pressed_function, self, pressed_function, virtual_key.pressed_function)
+                if released_function is not None:
+                    virtual_key.released_function = partial(fn_layer_released_function, self, released_function, virtual_key.released_function)
+
     def scan(self, interval_us: int = 1):
         if not self.phsical_key_board.scan(interval_us=interval_us):
             return
@@ -524,8 +543,8 @@ class MusicKeyBoard(VirtualKeyBoard):
         music_mapping_path: str,
         audio_manager: Optional[AudioManager] = None,
         mode: str = "C Major",
-        note_wav_path: str = "/wav/piano/16000",
-        note_cache_path: Optional[str] = "/cache/piano/16000",
+        note_wav_path: str = "/wav/piano/16000_2s",
+        note_cache_path: Optional[str] = "/cache/piano/16000_2s",
         *args,
         **kwargs
     ):
@@ -669,7 +688,7 @@ def main():
         time.sleep(0.01)
 
     midi_player = MIDIPlayer(
-        file_path="fukakai – KAF - Treble - Piano.mid"
+        file_path="fukakai – KAF.mid"
     )
 
     def play_note(idx: int, events: List[Tuple[int, str, bool]], led_manager: LEDManager, note_key_mapping: Dict[str, str]):
@@ -679,12 +698,19 @@ def main():
             print(f"{note} not set")
             return False
         if play:
-            led_manager.set_pixel(note_key_mapping[note], (16, 32, 8), write=True)
+            led_manager.set_pixel(note_key_mapping[note], (32, 24, 24))
+            for next_idx in range(idx + 1, len(events)):
+                _, next_note, play = events[next_idx]
+                if play and next_note in note_key_mapping:
+                    led_manager.set_pixel(note_key_mapping[next_note], (2, 4, 4))
+                    break
+            led_manager.write_pixels()
         else:
             led_manager.set_pixel(note_key_mapping[note], (1, 1, 1), write=True)
     play_func = partial(play_note, led_manager=virtual_key_board.phsical_key_board.led_manager, note_key_mapping=virtual_key_board.note_key_mapping)
     midi_player.time_multiplayer = 1 / 0.75
-    midi_player.start()
+    virtual_key_board.bind_fn_layer_func("ENTER", pressed_function=midi_player.start)
+    virtual_key_board.bind_fn_layer_func("BACKSPACE", pressed_function=midi_player.stop)
 
     while True:
         scan_start_time = time.ticks_ms()
