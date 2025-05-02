@@ -627,27 +627,28 @@ class MIDIPlayer():
         self.shift_delay_ms = 500
         self.time_multiplayer = 1.0
 
-        start_time_ms = 0
-        for event in MidiFile(file_path, reuse_event_object=True):
-            delta_ms = event.delta_us // 1000
-            start_time_ms += delta_ms
-            if event.status == umidiparser.NOTE_ON:
-                note = midinumber_to_note(event.note)
-                if event.velocity > 0:
-                    self.events.append((start_time_ms, note, True))
-                else:
+        if exists(file_path):
+            start_time_ms = 0
+            for event in MidiFile(file_path, reuse_event_object=True):
+                delta_ms = event.delta_us // 1000
+                start_time_ms += delta_ms
+                if event.status == umidiparser.NOTE_ON:
+                    note = midinumber_to_note(event.note)
+                    if event.velocity > 0:
+                        self.events.append((start_time_ms, note, True))
+                    else:
+                        self.events.append((start_time_ms, note, False))
+                # on channel event.channel with event.velocity
+                elif event.status == umidiparser.NOTE_OFF :
+                    note = midinumber_to_note(event.note)
                     self.events.append((start_time_ms, note, False))
-            # on channel event.channel with event.velocity
-            elif event.status == umidiparser.NOTE_OFF :
-                note = midinumber_to_note(event.note)
-                self.events.append((start_time_ms, note, False))
-                # ... stop the note event.note .
+                    # ... stop the note event.note .
 
     def play(self, play_func: Callable):
         if self.playing and self.idx < len(self.events):
             current_time = time.ticks_ms()
             if current_time - self.start_time >= int(self.events[self.idx][0] * self.time_multiplayer) + self.shift_delay_ms:
-                print(self.events[self.idx])
+                # print(self.events[self.idx])
                 play_func(self.idx, self.events)
                 self.idx += 1
             return True
@@ -726,8 +727,7 @@ def main():
 
 
 def midi_example():
-    # file_path = "fukakai – KAF - Treble - Piano.mid"
-    file_path = "fukakai – KAF.mid"
+    file_path = "mid/fukakai - KAF - Piano.mid"
 
     time.sleep_ms(1000) # Sleep before starting audio
     audio_manager = AudioManager(
@@ -740,8 +740,8 @@ def midi_example():
 
     # Load WAV files into memory first
     print("Loading WAVs...")
-    sampler = Sampler("/wav/piano/16000")
-    note_cache_path: Optional[str] = "/cache/piano/16000"
+    sampler = Sampler("/wav/piano/16000_2s")
+    note_cache_path: Optional[str] = "/cache/piano/16000_2s"
 
     for note in ["C", "D", "E", "F", "G", "A", "A#", "B"]:
         for i in range(2, 6):
@@ -806,6 +806,7 @@ def midi_example():
         else:
             # Show all events not processed
             print("other event", event)
+
 
 if __name__ == "__main__":
     # main()

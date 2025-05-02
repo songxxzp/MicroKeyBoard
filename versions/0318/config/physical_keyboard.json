@@ -1,5 +1,6 @@
 {
     "ktype": "74hc165",
+    "scan_mode": "GPIO",
     "clock_pin": 11,
     "pl_pin": 12,
     "ce_pin": 13,
@@ -9,6 +10,7 @@
     "ltype": "neopixel",
     "led_pixels": 68,
     "max_light_level": 16,
+    "onstart_light_level": 1,
     "led_data_pin": 10,
     "led_power_pin": 9
 }

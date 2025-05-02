@@ -10,7 +10,7 @@ from micropython import const
 from machine import Timer
 
 from utils import exists
-from constants import KEYBOARD_REPORT_DESC, IO_CAPABILITY_DISPLAY_ONLY, IRQ_CENTRAL_CONNECT, IRQ_CENTRAL_DISCONNECT, IRQ_GATTS_WRITE, IRQ_GATTS_READ_REQUEST, IRQ_ENCRYPTION_UPDATE, IRQ_GET_SECRET, IRQ_SET_SECRET, IRQ_MTU_EXCHANGED, FLAG_READ, FLAG_WRITE_NO_RESPONSE, FLAG_WRITE, FLAG_NOTIFY
+from constants import KEYBOARD_REPORT_DESC, IO_CAPABILITY_NO_INPUT_OUTPUT, IRQ_CENTRAL_CONNECT, IRQ_CENTRAL_DISCONNECT, IRQ_GATTS_WRITE, IRQ_GATTS_READ_REQUEST, IRQ_ENCRYPTION_UPDATE, IRQ_GET_SECRET, IRQ_SET_SECRET, IRQ_MTU_EXCHANGED, IRQ_CONNECTION_UPDATE, FLAG_READ, FLAG_WRITE_NO_RESPONSE, FLAG_WRITE, FLAG_NOTIFY
 
 
 class BluetoothKeyboard(object):
@@ -128,6 +128,11 @@ class BluetoothKeyboard(object):
             self.conn_handle, addr_type, addr = data
             self.notifications_enabled = False
             print("[Connect] Connected to:", binascii.hexlify(addr).decode())
+        elif event == IRQ_CONNECTION_UPDATE:
+            self.conn_handle, conn_interval, conn_latency, supervision_timeout, status = data
+            interval_ms = conn_interval * 1.25
+            timeout_ms = supervision_timeout * 1.25
+            print(f"[New Parameters] Interval={interval_ms:.2f} ms, Latency={conn_latency}, Timeout={timeout_ms:.2f} ms, Status={status}")
         elif event == IRQ_CENTRAL_DISCONNECT:
             conn_handle_old, addr_type, addr = data
             print("[Disconnect] Disconnected from:", binascii.hexlify(addr).decode())
@@ -206,7 +211,7 @@ class BluetoothKeyboard(object):
         self.ble.active(True)
         print("BLE Radio Active.")
         try:
-            self.ble.config(gap_name=self.device_name, mitm=True, bond=True, le_secure=True, io=IO_CAPABILITY_DISPLAY_ONLY)
+            self.ble.config(gap_name=self.device_name, mitm=True, bond=True, le_secure=True, io=IO_CAPABILITY_NO_INPUT_OUTPUT)
             print("BLE Configured.")
         except Exception as e: print(f"Error setting BLE config: {e}")
         self.ble.gap_advertise(None)

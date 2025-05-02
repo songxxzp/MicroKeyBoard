@@ -33,6 +33,7 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 - LED
 - TFT Screen
 - Piano
+- Sleep
 
 ## RoadMap
 
@@ -41,7 +42,7 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 - Guided OTA
 - WLAN
 - MIDI
-- SDCARD
+- SD Card
 - Matrix Scanning
 - Plugin
 

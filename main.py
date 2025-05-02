@@ -5,6 +5,7 @@ import random
 import neopixel
 import usb.device
 import gc
+import machine
 from ulab import numpy as np
 import micropython
 
@@ -39,7 +40,8 @@ class LEDManager:
         self.ledmap = ledmap
         
         self.led_power = Pin(self.led_power_pin, Pin.OUT)
-        self.led_power.value(1)
+        self.enabled = True
+        self.led_power.value(self.enabled)
 
         self.pixels = neopixel.NeoPixel(Pin(self.led_data_pin, Pin.OUT), self.led_pixels)
         # for i in range(self.led_pixels):
@@ -47,8 +49,24 @@ class LEDManager:
         self.pixels.fill((self.onstart_light_level, self.onstart_light_level, self.onstart_light_level))
         self.pixels.write()
 
-    def led_switch(self, open: bool = True):
-        self.led_power.value(open)
+    def disable(self):
+        self.enabled = False
+        self.led_power.value(0)
+
+    def enable(self):
+        self.enabled = True
+        self.led_power.value(1)
+        self.write_pixels()
+    
+    def switch(self):
+        self.enabled = not self.enabled
+        self.led_power.value(self.enabled)
+        if self.enabled:
+            self.write_pixels()
+
+    def clear(self):
+        self.pixels.fill((0, 0, 0))
+        self.pixels.write()
 
     def set_pixel(self, i: Union[int, str], color: Tuple[int], write: bool = False):
         if isinstance(i, str):
@@ -191,7 +209,7 @@ class PhysicalKeyBoard:
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
         self.key_ce = Pin(ce_pin, Pin.OUT, value=0)
         self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
-        self.wakeup_pin = Pin(wakeup_pin, Pin.IN) if wakeup_pin is not None else None
+        self.wakeup_pin = Pin(wakeup_pin, mode=Pin.IN, pull=Pin.PULL_DOWN) if wakeup_pin is not None else None
         if self.scan_mode == "SPI":
             self.key_clk = Pin(clock_pin)
             self.key_in = Pin(read_pin)
@@ -251,9 +269,9 @@ class PhysicalKeyBoard:
         self._current_buffer = self._buffer_a
         self._previous_buffer = self._buffer_b # Initially, both are zero, representing all keys released
         
-    def scan_keys(self, interval_us=1) -> None:
-        # TODO: self.scan_mode = spi or gpio
-        if self.scan_mode in ("SPI", "SoftSPI"):
+    def scan_keys(self, interval_us=1, scan_mode: Optional[str] = None) -> None:
+        scan_mode = scan_mode or self.scan_mode
+        if scan_mode in ("SPI", "SoftSPI"):
             # Load key state
             self.key_pl.value(0)
             self.key_pl.value(1)
@@ -285,7 +303,25 @@ class PhysicalKeyBoard:
                 self.key_clk.value(0)
                 time.sleep_us(interval_us)
             # self.key_ce.value(1)
-    
+
+    def sleep(self):
+        # TODO: esp32 is only for esp32, change for other boards
+        import esp32
+        led_enabled = self.led_manager.enabled
+        self.led_manager.led_power.value(0)
+        self.key_power.value(0)
+        self.wakeup_pin.init(mode=Pin.IN, pull=Pin.PULL_DOWN, hold=True)
+        # TODO: close screen, close I2S
+        # TODO: keep ble
+        esp32.wake_on_ext0(pin=self.wakeup_pin, level=esp32.WAKEUP_ANY_HIGH)
+        print("Preparing sleep")
+        time.sleep(1)
+        machine.lightsleep()
+        print(f"Waking Up. {machine.wake_reason()}")
+        self.key_power.value(1)
+        if led_enabled:
+            self.led_manager.enable()
+
     def scan(self, interval_us=1) -> bool:  # TODO: filter
         self.scan_keys(interval_us=interval_us)
         scan_change = False
@@ -348,10 +384,11 @@ class PhysicalKeyBoard:
         return scan_change
 
     def is_pressed(self) -> bool:
-        self.scan_keys()
+        self.scan_keys(scan_mode="GPIO")
         for byte_index in range(self.bytes_needed):
             current_byte = self._current_buffer[byte_index]
             if current_byte < 0xff:
+                # key_id = byte_index * 8 + bit_index
                 print(f"Is pressed: {byte_index}, {current_byte}")
                 return True
         return False
@@ -370,8 +407,10 @@ class VirtualKeyBoard:
         self.key_num = key_num
         if exists(mapping_path):
             self.virtual_key_mappings = json.load(open(mapping_path))
+            self.virtual_key_name = self.virtual_key_mappings.get("name", "MicroKeyBoard")
         else:
             self.virtual_key_mappings = None
+            self.virtual_key_name = "MicroKeyBoard"
 
         # editable keyboard state
         self.connection_mode = None
@@ -411,7 +450,9 @@ class VirtualKeyBoard:
         elif self.connection_mode == "bluetooth":
             print("swiching to ble mode")
             if self.ble_interface is None:
-                self.ble_interface = BluetoothKeyboard()
+                self.ble_interface = BluetoothKeyboard(
+                    device_name=self.virtual_key_name
+                )
             self.ble_interface.start()
             self.interface = self.ble_interface
         elif self.connection_mode == "debug":
@@ -528,7 +569,7 @@ class VirtualKeyBoard:
                 self.pressed_keys.append(virtual_key)
                 # self.keystates.append(virtual_key.keycode)
         self.pressed_keys.sort(key=lambda k:k.press_time, reverse=True)
-        self.keystates = [k.keycode for k in self.pressed_keys[:6]]
+        self.keystates = [k.keycode for k in self.pressed_keys[:6]]  # TODO: Don't use list.
         if self.keystates != self.prev_keystates:
             self.prev_keystates.clear()
             self.prev_keystates.extend(self.keystates)
@@ -586,6 +627,7 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.music_mapping_path = None
             self.audio_manager = None
             self.music_mapping = {}
+            self.note_key_mapping = {}
 
         super().__init__(*args, **kwargs)
 
@@ -683,12 +725,12 @@ def main():
     start_time = time.ticks_ms()
     current_time = time.ticks_ms()
 
-    for i in range(71):
-        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 0, 0), write=True)
+    for i in range(virtual_key_board.phsical_key_board.led_manager.led_pixels):
+        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 1, 0), write=True)
         time.sleep(0.01)
 
     midi_player = MIDIPlayer(
-        file_path="fukakai – KAF.mid"
+        file_path="mid/fukakai - KAF - Treble - Piano.mid"
     )
 
     def play_note(idx: int, events: List[Tuple[int, str, bool]], led_manager: LEDManager, note_key_mapping: Dict[str, str]):
@@ -710,10 +752,17 @@ def main():
     play_func = partial(play_note, led_manager=virtual_key_board.phsical_key_board.led_manager, note_key_mapping=virtual_key_board.note_key_mapping)
     midi_player.time_multiplayer = 1 / 0.75
     virtual_key_board.bind_fn_layer_func("ENTER", pressed_function=midi_player.start)
-    virtual_key_board.bind_fn_layer_func("BACKSPACE", pressed_function=midi_player.stop)
+    def stop_midi(midi_player: MIDIPlayer, led_manager: LEDManager):
+        midi_player.stop()
+        led_manager.clear()
+    virtual_key_board.bind_fn_layer_func("BACKSPACE", pressed_function=partial(stop_midi, midi_player, virtual_key_board.phsical_key_board.led_manager))
+    virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
+    virtual_key_board.bind_fn_layer_func("OPEN_BRACKET", pressed_function=partial(machine.freq, 80000000))
+    virtual_key_board.bind_fn_layer_func("CLOSE_BRACKET", pressed_function=partial(machine.freq, 240000000))
+    virtual_key_board.bind_fn_layer_func("DELETE", released_function=virtual_key_board.phsical_key_board.sleep)
 
     while True:
-        scan_start_time = time.ticks_ms()
+        scan_start_us = time.ticks_us()
         midi_player.play(play_func)
         virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
@@ -723,24 +772,14 @@ def main():
         count += 1
         max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
         current_time = time.ticks_ms()
-
-        # if current_time - start_time >= 500:
-        #     gc.collect()
+        scan_end_us = time.ticks_us()
+        time.sleep_us(max(990 - scan_end_us + scan_start_us, 0))
 
         if current_time - start_time >= 1000:
-            print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
+            # print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
             count = 0
             max_scan_gap = 0
             start_time = current_time
-
-        # for color in [st7789.RED, st7789.GREEN, st7789.BLUE]:
-        #     for x in range(tft.width):
-        #         tft.pixel(x, 0, color)
-        #         tft.pixel(x, tft.height - 1, color)
-
-        #     for y in range(tft.height):
-        #         tft.pixel(0 , y, color)
-        #         tft.pixel(tft.width - 1, y, color)
 
 
 if __name__ == "__main__":
