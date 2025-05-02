@@ -635,6 +635,7 @@ class MusicKeyBoard(VirtualKeyBoard):
         super().build_fn_layer(virtual_keys)
         for virtual_key in virtual_keys:
             physical_key = virtual_key.bind_physical
+            # TODO: only use for keyboard with audio
             if physical_key.key_name in ["AUDIO_CALL", "M"]:
                 def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
@@ -759,6 +760,8 @@ def main():
     virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
     virtual_key_board.bind_fn_layer_func("OPEN_BRACKET", pressed_function=partial(machine.freq, 80000000))
     virtual_key_board.bind_fn_layer_func("CLOSE_BRACKET", pressed_function=partial(machine.freq, 240000000))
+    
+    # TODO: only use for keyboard with int
     virtual_key_board.bind_fn_layer_func("DELETE", released_function=virtual_key_board.phsical_key_board.sleep)
 
     while True:
@@ -773,7 +776,7 @@ def main():
         max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
         current_time = time.ticks_ms()
         scan_end_us = time.ticks_us()
-        time.sleep_us(max(990 - scan_end_us + scan_start_us, 0))
+        time.sleep_us(min(max(990 - scan_end_us + scan_start_us, 0), 1000))  # TODO: dynamic speed
 
         if current_time - start_time >= 1000:
             # print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
