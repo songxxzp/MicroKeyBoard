@@ -5,7 +5,7 @@ import umidiparser
 
 from machine import Pin
 from machine import I2S
-from typing import Optional, List, Dict, Tuple, Callable
+from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
 
 from utils import exists, partial
@@ -134,7 +134,7 @@ class Voice:
     def reinit(
             self,
             voice_id: int,
-            loaded_data: bytes,
+            loaded_data: np.ndarray,
             current_pos: int,
             voice_name: Optional[str] = None,
             start_time: Optional[int] = None,
@@ -309,7 +309,7 @@ class AudioManager:
         buffer_samples: int = 1024,
         volume_factor: float = 0.2,
         always_play: bool = False,  # Always write to buffer to trigger callback.
-    ):
+    ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
              raise ValueError("Supports only 16-bit MONO audio")
 
@@ -342,9 +342,14 @@ class AudioManager:
         self.volume_factor = volume_factor
 
         # Double buffers (NumPy int16 arrays)
+        self.audio_bytebuffers = (
+            memoryview(bytearray(self.BUFFER_BYTES)),
+            memoryview(bytearray(self.BUFFER_BYTES))
+        )
+
         self.audio_buffers = [
-            np.zeros(self.BUFFER_SAMPLES, dtype=np.int16),
-            np.zeros(self.BUFFER_SAMPLES, dtype=np.int16),
+            np.frombuffer(self.audio_bytebuffers[0], dtype=np.int16),
+            np.frombuffer(self.audio_bytebuffers[1], dtype=np.int16)
         ]
         # Valid samples mixed into each buffer
         self.valid_samples = [0, 0]
@@ -355,7 +360,9 @@ class AudioManager:
 
         # Temporary NumPy buffer to compute volume
         self.volume_buffer_int16 = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
-        self.volume_factor_buffer = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
+        self.volume_factor_buffer = np.ones(self.BUFFER_SAMPLES, dtype=np.int16)
+        if volume_factor > 0:
+            self.volume_factor_buffer *= int(1 / volume_factor) 
 
         # Playback state
         self._is_playing = False
@@ -370,6 +377,11 @@ class AudioManager:
         self.audio_out.irq(self._i2s_callback)
         if self.always_play:
             self._i2s_callback(self)
+
+    def change_volume_factor(self, volume_factor: float):
+        self.volume_factor = volume_factor
+        if self.volume_factor > 0:
+            self.volume_factor_buffer[:] = int(1.0 / self.volume_factor)  # I2S.shift
 
     def load_wav(self, wav_file: str, wav_data: Optional[bytearray] = None):
         """Loads WAV file data into memory cache."""
@@ -396,7 +408,7 @@ class AudioManager:
     def _prepare_buffer(self, buffer_idx: int):
         """Mixes active voices (from memory) using NumPy."""
         target_buffer_np = self.audio_buffers[buffer_idx]
-        target_buffer_np[:] = 0 # Clear target NumPy buffer
+        target_buffer_np -= target_buffer_np  # Clear target NumPy buffer
 
         total_samples_mixed = 0
 
@@ -439,20 +451,19 @@ class AudioManager:
                 continue
 
             # Get memory slice for the current chunk (np.int16)
-            temp_int16_chunk = loaded_data[current_pos: current_pos + self.BUFFER_SAMPLES]
-            num_read_samples = temp_int16_chunk.size
+            num_read_samples = min(self.BUFFER_SAMPLES, loaded_data.size - current_pos)
 
             if num_read_samples > 0:
                 # Mix into the target buffer using NumPy addition
                 # Ensure slices match size
+                temp_int16_chunk = loaded_data[current_pos: current_pos + self.BUFFER_SAMPLES]
                 if self.volume_factor > 0:
-                    self.volume_buffer_int16[:] = 0
+                    self.volume_buffer_int16 -= self.volume_buffer_int16
                     if num_read_samples == self.BUFFER_SAMPLES:
                         self.volume_buffer_int16 += temp_int16_chunk
                     else:
                         volume_buffer = self.volume_buffer_int16[:num_read_samples]
                         volume_buffer += temp_int16_chunk
-                    self.volume_factor_buffer[:] = int(1 / self.volume_factor)
                     self.volume_buffer_int16 //= self.volume_factor_buffer
                     target_buffer_np += self.volume_buffer_int16
 
@@ -461,8 +472,8 @@ class AudioManager:
                 voice_info.current_pos += num_read_samples
 
             # Check if this voice finished reading (reached end of loaded data)
-            if current_pos + num_read_samples >= len(loaded_data):
-                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, len(loaded_data))}")
+            if current_pos + num_read_samples >= loaded_data.size:
+                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, loaded_data.size)}")
                 voice_info.finished = True
 
         # Remove finished voices
@@ -490,11 +501,19 @@ class AudioManager:
         # Write the prepared buffer to I2S if it has data
         if samples_to_play > 0:
             # Convert NumPy int16 slice to bytes
-            byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
+            # byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
+            # if samples_to_play == self.BUFFER_SAMPLES:
+            #     byte_data = self.audio_bytebuffers[play_idx]
+            # else:
+                # byte_data = self.audio_bytebuffers[play_idx][:samples_to_play * self.bytes_per_sample]  # TODO: don't slice
+            byte_data = self.audio_bytebuffers[play_idx][
+                :samples_to_play * self.bytes_per_sample
+            ]
             self.audio_out.write(byte_data)
             write_tiggered = True
         elif self.always_play:
-            byte_data = self.audio_buffers[play_idx][:self.BUFFER_BYTES].tobytes()
+            # byte_data = self.audio_buffers[play_idx][:self.BUFFER_SAMPLES].tobytes()
+            byte_data = self.audio_bytebuffers[play_idx]  # [:self.BUFFER_BYTES]
             self.audio_out.write(byte_data)
             write_tiggered = True
 
@@ -560,10 +579,13 @@ class AudioManager:
 
             # Prepare the initial two buffers (in main thread)
             # self._prepare_buffer(0) # blanck buffer
-            self.audio_buffers[0][:] = 0
-            self.audio_buffers[1][:] = 0
-            self.valid_samples = [self.BUFFER_SAMPLES, self.BUFFER_SAMPLES]
-            byte_data_init = self.audio_buffers[0][:].tobytes()
+            self.audio_buffers[0] -= self.audio_buffers[0]
+            self.audio_buffers[1] -= self.audio_buffers[1]
+            # self.valid_samples = [self.BUFFER_SAMPLES, self.BUFFER_SAMPLES]
+            self.valid_samples[0] = self.BUFFER_SAMPLES
+            self.valid_samples[1] = self.BUFFER_SAMPLES
+            # byte_data_init = self.audio_buffers[0][:].tobytes()
+            byte_data_init = self.audio_bytebuffers[0]  # [:self.BUFFER_BYTES]
             self.audio_out.write(byte_data_init)
             self.buffer_to_play_idx = 1 # Next IRQ plays buffer 1
             # self.buffer_to_play_idx = 0
@@ -602,8 +624,8 @@ class AudioManager:
                 voice.valid = False
 
             # Reset buffer state (NumPy buffers)
-            self.audio_buffers[0][:] = 0
-            self.audio_buffers[1][:] = 0
+            self.audio_buffers[0] -= self.audio_buffers[0]
+            self.audio_buffers[1] -= self.audio_buffers[1]
             self.valid_samples = [0, 0]
             self.buffer_to_play_idx = 0
 
@@ -620,7 +642,7 @@ class MIDIPlayer():
         self,
         file_path: str,
     ):
-        self.events: List[Tuple[int, str, bool]] = []
+        self.events: List[Tuple[Union[int, float], str, bool]] = []
         self.idx = 0
         self.playing = False
         self.start_time = time.ticks_ms()
@@ -635,17 +657,19 @@ class MIDIPlayer():
                 if event.status == umidiparser.NOTE_ON:
                     note = midinumber_to_note(event.note)
                     if event.velocity > 0:
-                        self.events.append((start_time_ms, note, True))
+                        self.events.append((float(start_time_ms), note, True))
                     else:
-                        self.events.append((start_time_ms, note, False))
+                        self.events.append((float(start_time_ms), note, False))
                 # on channel event.channel with event.velocity
                 elif event.status == umidiparser.NOTE_OFF :
                     note = midinumber_to_note(event.note)
-                    self.events.append((start_time_ms, note, False))
+                    self.events.append((float(start_time_ms), note, False))
                     # ... stop the note event.note .
+        
+        self.event_length = len(self.events)
 
     def play(self, play_func: Callable):
-        if self.playing and self.idx < len(self.events):
+        if self.playing and self.idx < self.event_length:
             current_time = time.ticks_ms()
             if current_time - self.start_time >= int(self.events[self.idx][0] * self.time_multiplayer) + self.shift_delay_ms:
                 # print(self.events[self.idx])
@@ -775,10 +799,22 @@ def midi_example():
             audio_manager.stop_note(note, delay=500)
     play_func = partial(play_note, audio_manager=audio_manager)
 
+    count = 0
+    max_scan_gap = 0
+    start_time = time.ticks_ms()
+    current_time = time.ticks_ms()
     midi_player.start()
     while True:
         if not midi_player.play(play_func):
             break
+        time.sleep_ms(1)
+        max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
+        current_time = time.ticks_ms()
+        if current_time - start_time >= 1000:
+            print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
+            count = 0
+            max_scan_gap = 0
+            start_time = current_time
 
     for event in MidiFile(file_path, reuse_event_object=True).play():
         if event.status == umidiparser.NOTE_ON:

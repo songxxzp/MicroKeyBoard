@@ -61,10 +61,12 @@ class ScreenManager:  # TODO: global logger
             self.height = self.tft.height
 
             self.enabled = True
+            self.prepared = False
         else:
             self.config = None
             self.tft = None
             self.enabled = False
+            self.prepared = False
 
     def prepare_animate(self, fps: int = 8):
         self.screen_buf = bytearray(self.width * self.height * 2)
@@ -75,16 +77,18 @@ class ScreenManager:  # TODO: global logger
         avtar_width = 120
         avtar_height = 135
 
-        self.abufs = [framebuf.FrameBuffer(bytearray(avtar_width * avtar_height * 2), avtar_width, avtar_height, framebuf.RGB565) for _ in range(8)]  # TODO: write into config
+        self.abuf_len = 8
+        self.abufs = tuple([framebuf.FrameBuffer(bytearray(avtar_width * avtar_height * 2), avtar_width, avtar_height, framebuf.RGB565) for _ in range(self.abuf_len)])  # TODO: write into config
 
         with open("/animate565/upython-with-micro.240135.rgb565") as f:
             f.readinto(self.bbuf)
-        for i in range(8):
+        for i in range(self.abuf_len):
             with open(f"/animate565/frame_000{i}.rgb565") as f:
                 f.readinto(self.abufs[i])
-                
+
         self.last_fresh_time = time.ticks_ms()
         self.next_prepared = False
+        self.pause = False
         self.fps = fps
         self.frame_index = 0
         self.prepared = True
@@ -92,14 +96,20 @@ class ScreenManager:  # TODO: global logger
         self.tft.backlight.value(1)
 
         self.fbuf.blit(self.bbuf, 0, 0, 0)
-        self.tft.blit_buffer(buffer=self.fbuf, x=0, y=0, width=self.width, height=self.height)
+        self.tft.blit_buffer(buffer=self.screen_buf, x=0, y=0, width=self.width, height=self.height)
+
+    def pause_animate(self, pause: bool = False):
+        self.pause = (not self.pause) or pause
+        print(f"pause animate: {self.pause}")
 
     def step_animate(self, write: bool = True):
-        if not (self.enabled and getattr(self, "prepared", False)):
+        if not (self.enabled and self.prepared):
+            return
+        if self.pause:
             return
 
         current_time = time.ticks_ms()
-        if current_time - self.last_fresh_time >= 999.0 // self.fps:
+        if current_time - self.last_fresh_time >= 999 // self.fps:
             if write:
                 self.tft.blit_buffer(buffer=self.fbuf, x=0, y=0, width=self.width, height=self.height)
                 self.last_fresh_time = current_time
@@ -107,7 +117,7 @@ class ScreenManager:  # TODO: global logger
         elif not self.next_prepared:
             self.fbuf.blit(self.bbuf, 0, 0, 0)
             self.fbuf.blit(self.abufs[self.frame_index], 120, 0, 0)
-            self.frame_index = (self.frame_index + 1) % len(self.abufs)
+            self.frame_index = (self.frame_index + 1) % self.abuf_len
             self.next_prepared = True
         else:
             return
@@ -170,7 +180,7 @@ def main():
         file_path="mid/fukakai - KAF - Treble - Piano.mid"
     )
 
-    def play_note(idx: int, events: List[Tuple[int, str, bool]], led_manager: LEDManager, note_key_mapping: Dict[str, str]):
+    def play_note(idx: int, events: List[Tuple[Union[int, float], str, bool]], led_manager: LEDManager, note_key_mapping: Dict[str, str]):
         _, note, play = events[idx]
         if note not in note_key_mapping:
             # raise NotImplementedError(f"{note} not set")
@@ -200,6 +210,7 @@ def main():
     virtual_key_board.bind_fn_layer_func("DELETE", released_function=virtual_key_board.phsical_key_board.sleep)
     virtual_key_board.bind_fn_layer_func("S", pressed_function=screen_manager.stop_animate)
     virtual_key_board.bind_fn_layer_func("A", pressed_function=screen_manager.prepare_animate)
+    virtual_key_board.bind_fn_layer_func("P", pressed_function=screen_manager.pause_animate)
 
     screen_manager.prepare_animate()
 

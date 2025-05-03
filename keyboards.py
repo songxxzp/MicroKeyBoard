@@ -547,9 +547,9 @@ class MusicKeyBoard(VirtualKeyBoard):
                 def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
                         if virtual_key_board.audio_manager.volume_factor > 0:
-                            virtual_key_board.audio_manager.volume_factor = 0
+                            virtual_key_board.audio_manager.change_volume_factor(0)
                         else:
-                            virtual_key_board.audio_manager.volume_factor = 0.1
+                            virtual_key_board.audio_manager.change_volume_factor(0.1)
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(sound_pressed_function, self, virtual_key.pressed_function)
