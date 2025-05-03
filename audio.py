@@ -347,10 +347,10 @@ class AudioManager:
             memoryview(bytearray(self.BUFFER_BYTES))
         )
 
-        self.audio_buffers = [
+        self.audio_buffers = (
             np.frombuffer(self.audio_bytebuffers[0], dtype=np.int16),
             np.frombuffer(self.audio_bytebuffers[1], dtype=np.int16)
-        ]
+        )
         # Valid samples mixed into each buffer
         self.valid_samples = [0, 0]
         self.buffer_to_play_idx = 0 # Index of buffer to play next
@@ -483,8 +483,6 @@ class AudioManager:
 
         self.valid_samples[buffer_idx] = total_samples_mixed
 
-        # TODO: Overflow Clipping
-
     def _i2s_callback(self, caller):
         """I2S IRQ Callback."""
         if not self._is_playing:
@@ -499,21 +497,12 @@ class AudioManager:
         write_tiggered = False
 
         # Write the prepared buffer to I2S if it has data
-        if samples_to_play > 0:
-            # Convert NumPy int16 slice to bytes
-            # byte_data = self.audio_buffers[play_idx][:samples_to_play].tobytes()
-            # if samples_to_play == self.BUFFER_SAMPLES:
-            #     byte_data = self.audio_bytebuffers[play_idx]
-            # else:
-                # byte_data = self.audio_bytebuffers[play_idx][:samples_to_play * self.bytes_per_sample]  # TODO: don't slice
-            byte_data = self.audio_bytebuffers[play_idx][
-                :samples_to_play * self.bytes_per_sample
-            ]
+        if self.always_play or samples_to_play == self.BUFFER_SAMPLES:
+            byte_data = self.audio_bytebuffers[play_idx]
             self.audio_out.write(byte_data)
             write_tiggered = True
-        elif self.always_play:
-            # byte_data = self.audio_buffers[play_idx][:self.BUFFER_SAMPLES].tobytes()
-            byte_data = self.audio_bytebuffers[play_idx]  # [:self.BUFFER_BYTES]
+        elif samples_to_play > 0:
+            byte_data = self.audio_bytebuffers[play_idx][:samples_to_play * self.bytes_per_sample]
             self.audio_out.write(byte_data)
             write_tiggered = True
 
@@ -532,7 +521,6 @@ class AudioManager:
             print(f"Nothing write to I2S, retriggering...")
             assert caller is not self, "Loop"
             self._i2s_callback(self)
-
 
     def play_note(self, wav_file: str, nickname: Optional[str] = None, playtime: Optional[int] = None) -> int:
         """Plays a note (non-blocking). Adds the WAV file data (from cache) to active voices."""
@@ -578,18 +566,14 @@ class AudioManager:
             self._is_playing = True
 
             # Prepare the initial two buffers (in main thread)
-            # self._prepare_buffer(0) # blanck buffer
-            self.audio_buffers[0] -= self.audio_buffers[0]
-            self.audio_buffers[1] -= self.audio_buffers[1]
-            # self.valid_samples = [self.BUFFER_SAMPLES, self.BUFFER_SAMPLES]
+            audio_buffer_a, audio_buffer_b = self.audio_buffers
+            audio_buffer_a -= audio_buffer_a
+            audio_buffer_b -= audio_buffer_b
             self.valid_samples[0] = self.BUFFER_SAMPLES
             self.valid_samples[1] = self.BUFFER_SAMPLES
-            # byte_data_init = self.audio_buffers[0][:].tobytes()
-            byte_data_init = self.audio_bytebuffers[0]  # [:self.BUFFER_BYTES]
+            byte_data_init = self.audio_bytebuffers[0]
             self.audio_out.write(byte_data_init)
             self.buffer_to_play_idx = 1 # Next IRQ plays buffer 1
-            # self.buffer_to_play_idx = 0
-            # self._i2s_callback(self)
         return new_voice_id
 
     def stop_note(self, wav_file: Optional[str] = None, wav_id: Optional[int] = None, delay: Optional[int] = None):
@@ -624,8 +608,9 @@ class AudioManager:
                 voice.valid = False
 
             # Reset buffer state (NumPy buffers)
-            self.audio_buffers[0] -= self.audio_buffers[0]
-            self.audio_buffers[1] -= self.audio_buffers[1]
+            audio_buffer_a, audio_buffer_b = self.audio_buffers
+            audio_buffer_a -= audio_buffer_a
+            audio_buffer_b -= audio_buffer_b
             self.valid_samples = [0, 0]
             self.buffer_to_play_idx = 0
 
@@ -807,7 +792,7 @@ def midi_example():
     while True:
         if not midi_player.play(play_func):
             break
-        time.sleep_ms(1)
+        time.sleep_ms(4)
         max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
         current_time = time.ticks_ms()
         if current_time - start_time >= 1000:

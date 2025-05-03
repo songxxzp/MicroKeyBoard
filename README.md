@@ -47,6 +47,8 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 - SD Card
 - Matrix Scanning
 - Plugin
+- Display Info
+- Waveform Generator
 
 ## Versions
 
