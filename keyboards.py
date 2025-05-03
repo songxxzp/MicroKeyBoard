@@ -16,6 +16,38 @@ from keys import PhysicalKey, VirtualKey
 from utils import partial, exists, makedirs
 
 
+def fn_layer_pressed_function(
+    virtual_key_board: "VirtualKeyBoard",
+    virtual_key: "VirtualKey",
+    layer_codes: Optional[Tuple[str]] = None,
+    pressed_function: Optional[Callable] = None,
+    original_func: Optional[Callable] = None
+):
+    if virtual_key_board.layer == 1:
+        if layer_codes is not None:
+            virtual_key.keycode = layer_codes[1]
+        if pressed_function is not None:
+            pressed_function()
+    elif original_func is not None:
+        original_func()
+
+
+def fn_layer_released_function(
+    virtual_key_board: "VirtualKeyBoard",
+    virtual_key: "VirtualKey",
+    layer_codes: Optional[Tuple[str]] = None,
+    released_function: Optional[Callable] = None,
+    original_func: Optional[Callable] = None
+):
+    if layer_codes is not None:
+        virtual_key.keycode = layer_codes[0]
+    if virtual_key_board.layer == 1:
+        if released_function is not None:
+            released_function()
+    elif original_func is not None:
+        original_func()
+
+
 class LEDManager:
     def __init__(
         self,
@@ -379,6 +411,8 @@ class VirtualKeyBoard:
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         for virtual_key in virtual_keys:
             physical_key = virtual_key.bind_physical
+            layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
+            layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None) if layer_1_code_name is not None else None)
             if physical_key.key_name == "FN":  # create ".py" file or build from file.
                 def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
                     print("change to layer 1")
@@ -418,38 +452,19 @@ class VirtualKeyBoard:
                         original_func()
                 virtual_key.pressed_function = partial(clear_ble_pressed_function, self, virtual_key.pressed_function)
             elif self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"]["1"]:
-                layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
-                layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None))
-                def fn_layer_pressed_function(virtual_key_board: "VirtualKeyBoard", virtual_key: "VirtualKey", layer_codes: Tuple[str], original_func: Callable = None):
-                    if virtual_key_board.layer == 1:
-                        virtual_key.keycode = layer_codes[1]
-                    elif original_func:
-                        original_func()
-                def fn_layer_released_function(virtual_key: "VirtualKey", layer_codes: Tuple[str], original_func: Callable = None):
-                    virtual_key.keycode = layer_codes[0]
-                    if original_func:
-                        original_func()
                 virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function)
-                virtual_key.released_function = partial(fn_layer_released_function, virtual_key, layer_codes, virtual_key.released_function)
+                virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function)
 
     def bind_fn_layer_func(self, key_name: str, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None):
         for virtual_key in self.virtual_keys:
             physical_key = virtual_key.bind_physical
-            if physical_key.key_name == key_name:
-                def fn_layer_pressed_function(virtual_key_board: "VirtualKeyBoard", pressed_function: Callable = None, original_func: Callable = None):
-                    if virtual_key_board.layer == 1:
-                        pressed_function()
-                    elif original_func:
-                        original_func()
-                def fn_layer_released_function(virtual_key_board: "VirtualKeyBoard", released_function: Callable, original_func: Callable = None):
-                    if virtual_key_board.layer == 1:
-                        released_function()
-                    elif original_func:
-                        original_func()
+            layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
+            layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None) if layer_1_code_name is not None else None)
+            if physical_key.key_name == key_name:  # TODO: build a mapping dict
                 if pressed_function is not None:
-                    virtual_key.pressed_function = partial(fn_layer_pressed_function, self, pressed_function, virtual_key.pressed_function)
+                    virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function)
                 if released_function is not None:
-                    virtual_key.released_function = partial(fn_layer_released_function, self, released_function, virtual_key.released_function)
+                    virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function)
 
     def scan(self, interval_us: int = 1):
         if not self.phsical_key_board.scan(interval_us=interval_us):
