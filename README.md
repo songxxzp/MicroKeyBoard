@@ -28,12 +28,14 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 
 - Shift Register
 - Key Mapping
+- Key Macro
 - USB
 - BLE
 - LED
 - TFT Screen
 - Piano
-- Sleep
+- Power Save
+- Micro Live2D
 
 ## RoadMap
 

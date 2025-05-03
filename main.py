@@ -5,6 +5,7 @@ import random
 import neopixel
 import usb.device
 import gc
+import framebuf
 import machine
 from ulab import numpy as np
 import micropython
@@ -12,7 +13,7 @@ import micropython
 from typing import List, Dict, Optional, Callable, Tuple, Union
 from machine import Pin, I2S, SPI, SoftSPI
 
-import st7789py as st7789
+from st7789py import ST7789, color565
 import vga2_bold_16x32 as font
 
 from audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
@@ -24,41 +25,129 @@ from utils import DEBUG
 from keyboards import PhysicalKeyBoard, VirtualKeyBoard, MusicKeyBoard, LEDManager
 
 
-def screen(tft, names: List[str] = ["MicroKeyBoard", "Mode", "F Major"]):  # TODO: build screen manager
-    color_values = (255, 255, 255)
-    height_division = tft.height // len(color_values)
-    for i, color_value in enumerate(color_values):
-        start_row = i * height_division
-        end_row = (i + 1) * height_division
-        for row in range(start_row, end_row):
-            rgb_color = [0 if idx != i else int(interpolate(0, color_value, row - start_row, height_division)) for idx in range(3)]
-            color = st7789.color565(rgb_color)
+class ScreenManager:  # TODO: global logger
+    def __init__(
+        self,
+        config_path = "/config/screen_config.json",
+    ):
+        if exists(config_path):
+            self.config = json.load(open(config_path))
 
-        for row in range(start_row, end_row):
-            tft.hline(0, row, tft.width, color)
+            self.type: int = self.config.get("type", "ST7789")  # TODO: use for import driver
+            physical_width: int = self.config.get("width", 135)
+            physical_height: int = self.config.get("height", 240)
+            rotation: int = self.config.get("rotation", 1)
 
-        name = names[i]
-        text_x = (tft.width - font.WIDTH * len(name)) // 2
-        text_y = start_row + (end_row - start_row - font.HEIGHT) // 2
-        tft.text(font, name, text_x, text_y, st7789.WHITE, color)
+            self.spi = SPI(
+                2,
+                baudrate=40000000,
+                sck=Pin(self.config.get("sck", 1)),
+                mosi=Pin(self.config.get("mosi", 2)),
+                miso=None
+            )  # TODO: reuse spi
 
-    return tft
+            self.tft = ST7789(
+                self.spi,
+                physical_width,
+                physical_height,
+                reset=Pin(self.config.get("reset", 42), Pin.OUT),
+                cs=Pin(self.config.get("cs", 40), Pin.OUT),
+                dc=Pin(self.config.get("dc", 41), Pin.OUT),
+                backlight=Pin(self.config.get("backlight", 39), Pin.OUT),
+                rotation=rotation,
+            )
+
+            self.width = self.tft.width
+            self.height = self.tft.height
+
+            self.enabled = True
+        else:
+            self.config = None
+            self.tft = None
+            self.enabled = False
+
+    def prepare_animate(self, fps: int = 8):
+        self.screen_buf = bytearray(self.width * self.height * 2)
+        self.background_buf = bytearray(self.width * self.height * 2)
+        self.fbuf = framebuf.FrameBuffer(self.screen_buf, self.width, self.height, framebuf.RGB565)
+        self.bbuf = framebuf.FrameBuffer(self.background_buf, self.width, self.height, framebuf.RGB565)
+        
+        avtar_width = 120
+        avtar_height = 135
+
+        self.abufs = [framebuf.FrameBuffer(bytearray(avtar_width * avtar_height * 2), avtar_width, avtar_height, framebuf.RGB565) for _ in range(8)]  # TODO: write into config
+
+        with open("/animate565/upython-with-micro.240135.rgb565") as f:
+            f.readinto(self.bbuf)
+        for i in range(8):
+            with open(f"/animate565/frame_000{i}.rgb565") as f:
+                f.readinto(self.abufs[i])
+                
+        self.last_fresh_time = time.ticks_ms()
+        self.next_prepared = False
+        self.fps = fps
+        self.frame_index = 0
+        self.prepared = True
+        self.enabled = True
+        self.tft.backlight.value(1)
+
+        self.fbuf.blit(self.bbuf, 0, 0, 0)
+        self.tft.blit_buffer(buffer=self.fbuf, x=0, y=0, width=self.width, height=self.height)
+
+    def step_animate(self, write: bool = True):
+        if not (self.enabled and getattr(self, "prepared", False)):
+            return
+
+        current_time = time.ticks_ms()
+        if current_time - self.last_fresh_time >= 999.0 // self.fps:
+            if write:
+                self.tft.blit_buffer(buffer=self.fbuf, x=0, y=0, width=self.width, height=self.height)
+                self.last_fresh_time = current_time
+                self.next_prepared = False
+        elif not self.next_prepared:
+            self.fbuf.blit(self.bbuf, 0, 0, 0)
+            self.fbuf.blit(self.abufs[self.frame_index], 120, 0, 0)
+            self.frame_index = (self.frame_index + 1) % len(self.abufs)
+            self.next_prepared = True
+        else:
+            return
+    
+    def stop_animate(self):
+        self.prepared = False
+        self.enabled = False
+        self.tft.backlight.value(0)
+
+    def text_lines(self, lines: List[str]):
+        if self.tft is None:
+            return
+        tft = self.tft
+        color_values = tuple([255 for _ in lines])
+        height_division = tft.height // len(color_values)
+        for i, color_value in enumerate(color_values):
+            start_row = i * height_division
+            end_row = (i + 1) * height_division
+            for row in range(start_row, end_row):
+                rgb_color = [0 if idx != i else int(interpolate(0, color_value, row - start_row, height_division)) for idx in range(3)]
+                color = color565(rgb_color)
+
+            for row in range(start_row, end_row):
+                tft.hline(0, row, tft.width, color)
+            name = lines[i]
+            text_x = (tft.width - font.WIDTH * len(name)) // 2
+            text_y = start_row + (end_row - start_row - font.HEIGHT) // 2
+            tft.text(font, name, text_x, text_y, 0xFFFF, color)
+        return tft
 
 
 def main():
     check_disk_space()
     time.sleep_ms(1000)
-    tft = st7789.ST7789(
-        SPI(2, baudrate=40000000, sck=Pin(1), mosi=Pin(2), miso=None),
-        135,
-        240,
-        reset=Pin(42, Pin.OUT),
-        cs=Pin(40, Pin.OUT),
-        dc=Pin(41, Pin.OUT),
-        backlight=Pin(39, Pin.OUT),
-        rotation=1,
+
+    screen_manager = ScreenManager(
+        config_path="/config/screen_config.json"
     )
-    screen(tft,names=["MicroKeyBoard", "Music Mode", "Starting"])
+
+    screen_manager.text_lines(["MicroKeyBoard", "Starting"])
     # virtual_key_board = VirtualKeyBoard()
 
     virtual_key_board = MusicKeyBoard(
@@ -66,8 +155,8 @@ def main():
         mode = "F Major"
     )
 
-    time.sleep_ms(50)
-    screen(tft,names=["MicroKeyBoard", "Music Mode", "F Major"])
+    screen_manager.text_lines(["MicroKeyBoard", "Music Mode", "F Major"])
+
     count = 0
     max_scan_gap = 0
     start_time = time.ticks_ms()
@@ -107,13 +196,17 @@ def main():
     virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
     virtual_key_board.bind_fn_layer_func("OPEN_BRACKET", pressed_function=partial(machine.freq, 80000000))
     virtual_key_board.bind_fn_layer_func("CLOSE_BRACKET", pressed_function=partial(machine.freq, 240000000))
-
     # TODO: only use for keyboard with int
     virtual_key_board.bind_fn_layer_func("DELETE", released_function=virtual_key_board.phsical_key_board.sleep)
+    virtual_key_board.bind_fn_layer_func("S", pressed_function=screen_manager.stop_animate)
+    virtual_key_board.bind_fn_layer_func("A", pressed_function=screen_manager.prepare_animate)
+
+    screen_manager.prepare_animate()
 
     while True:
         scan_start_us = time.ticks_us()
         midi_player.play(play_func)
+        screen_manager.step_animate()
         virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
@@ -126,7 +219,7 @@ def main():
         time.sleep_us(min(max(990 - scan_end_us + scan_start_us, 0), 1000))  # TODO: dynamic speed
 
         if current_time - start_time >= 1000:
-            # print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
+            print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
             count = 0
             max_scan_gap = 0
             start_time = current_time

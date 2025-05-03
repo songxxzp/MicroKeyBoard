@@ -242,7 +242,7 @@ class PhysicalKeyBoard:
         esp32.wake_on_ext0(pin=self.wakeup_pin, level=esp32.WAKEUP_ANY_HIGH)
         print("Preparing sleep")
         time.sleep(1)
-        machine.lightsleep()
+        machine.lightsleep()  # TODO: wait for all key released
         print(f"Waking Up. {machine.wake_reason()}")
         self.key_power.value(1)
         if led_enabled:
@@ -461,10 +461,8 @@ class VirtualKeyBoard:
             layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
             layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None) if layer_1_code_name is not None else None)
             if physical_key.key_name == key_name:  # TODO: build a mapping dict
-                if pressed_function is not None:
-                    virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function)
-                if released_function is not None:
-                    virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function)
+                virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function)
+                virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function)
 
     def scan(self, interval_us: int = 1):
         if not self.phsical_key_board.scan(interval_us=interval_us):
