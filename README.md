@@ -49,6 +49,7 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 - Plugin
 - Display Info
 - Waveform Generator
+- ADC
 
 ## Versions
 

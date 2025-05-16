@@ -492,11 +492,12 @@ class MusicKeyBoard(VirtualKeyBoard):
         audio_manager: Optional[AudioManager] = None,
         mode: str = "C Major",
         note_wav_path: str = "/wav/piano/16000_2s",
-        note_cache_path: Optional[str] = "/cache/piano/16000_2s",
+        note_cache_path: Optional[str] = "/cache/piano/16000_1.8s",
         *args,
         **kwargs
     ):
         if exists(music_mapping_path):
+            self.music_enabled = True
             self.music_mapping_path = music_mapping_path
             if audio_manager is None:
                 audio_manager = AudioManager(
@@ -504,7 +505,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                     buffer_samples=1024,
                     ibuf=4096,
                     always_play=True,
-                    volume_factor=0.1
+                    # volume_factor=0.1
                 )
             self.audio_manager = audio_manager
             self.sampler = Sampler(note_wav_path)
@@ -522,15 +523,16 @@ class MusicKeyBoard(VirtualKeyBoard):
                     if exists(f"{note_cache_path}/{note}"):
                         wav_data = open(f"{note_cache_path}/{note}", "rb").read()
                     else:
-                        wav_data = self.sampler.get_sample(note, duration=2.0).tobytes()
+                        wav_data = self.sampler.get_sample(note, duration=1.8).tobytes()
                         with open(f"{note_cache_path}/{note}", "wb") as f:
                             f.write(wav_data)
                 else:
-                    wav_data = self.sampler.get_sample(note, duration=2.0).tobytes()
+                    wav_data = self.sampler.get_sample(note, duration=1.8).tobytes()
                 self.audio_manager.load_wav(note, wav_data)
                 # micropython.mem_info()
                 gc.collect()
         else:
+            self.music_enabled = False
             self.music_mapping_path = None
             self.audio_manager = None
             self.music_mapping = {}
@@ -546,10 +548,14 @@ class MusicKeyBoard(VirtualKeyBoard):
             if physical_key.key_name in ["AUDIO_CALL", "M"]:
                 def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
                     if virtual_key_board.layer == 1:
-                        if virtual_key_board.audio_manager.volume_factor > 0:
-                            virtual_key_board.audio_manager.change_volume_factor(0)
+                        if virtual_key_board.music_enabled:
+                            if virtual_key_board.audio_manager.is_playing():
+                                virtual_key_board.audio_manager.stop_all()
+                            virtual_key_board.music_enabled = False
                         else:
-                            virtual_key_board.audio_manager.change_volume_factor(0.1)
+                            if self.audio_manager is not None:
+                                virtual_key_board.music_enabled = True
+
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(sound_pressed_function, self, virtual_key.pressed_function)
@@ -570,12 +576,13 @@ class MusicKeyBoard(VirtualKeyBoard):
                         pressed_function=None,
                         released_function=None,
                     )
-                    def pressed_function(virtual_key: VirtualKey, note: str):
-                        virtual_key.playing_wav_id = self.audio_manager.play_note(note)
+                    def pressed_function(virtual_key_board: "MusicKeyBoard", virtual_key: VirtualKey, note: str):
+                        if virtual_key_board.music_enabled:
+                            virtual_key.playing_wav_id = self.audio_manager.play_note(note)
                     def released_function(virtual_key: VirtualKey):
                         if hasattr(virtual_key, "playing_wav_id"):
-                            self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=500)
-                    virtual_key.pressed_function = partial(pressed_function, virtual_key, self.music_mapping[physical_key.key_name])
+                            self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=200)
+                    virtual_key.pressed_function = partial(pressed_function, self, virtual_key, self.music_mapping[physical_key.key_name])
                     virtual_key.released_function = partial(released_function, virtual_key)
                 else:
                     virtual_key = VirtualKey(key_name=key_code_name, keycode=getattr(KeyCode, key_code_name, None), physical_key=physical_key)

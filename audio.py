@@ -166,6 +166,7 @@ class Sampler:
     def __init__(self,
         sample_dir : str,
         rate : int = 16000,
+        volume_factor: float = 0.1,
     ):
         """
         Initialize the sampler
@@ -174,6 +175,7 @@ class Sampler:
         """
         self.sample_dir = sample_dir
         self.rate = rate
+        self.volume_factor = volume_factor
         self.samples = {}  # Store sample filepath
         self.keys = []     # Store the keys (pitches) of the sample notes
         self.load_samples()
@@ -233,10 +235,13 @@ class Sampler:
         """
         if note in self.samples:
             # If the note directly exists in the samples, return the sample data
-            return self.load_sample(self.samples[note], duration=duration)
+            sample = self.load_sample(self.samples[note], duration=duration)
         else:
             # If the note does not exist, use pitch shifting to generate it
-            return self.pitch_shift(note, duration=duration)
+            sample = self.pitch_shift(note, duration=duration)
+        if self.volume_factor > 0:
+            sample //= int(1 / self.volume_factor)  # TODO: check memory fragment
+        return sample
 
     def pitch_shift(self, note, duration: Optional[float] = None):
         """
@@ -307,7 +312,7 @@ class AudioManager:
         ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
-        volume_factor: float = 0.2,
+        volume_factor: float = 0.1,
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
@@ -339,7 +344,8 @@ class AudioManager:
         self.rate = rate
         self.max_voices = max_voices
         self.bytes_per_sample = (self.bits // 8) * (self.format + 1) # Should be 2
-        self.volume_factor = volume_factor
+        self.volume_factor = volume_factor  # TODO: use for es8156 or es8311 hardware volume
+        # TODO: add software volume controll
 
         # Double buffers (NumPy int16 arrays)
         self.audio_bytebuffers = (
@@ -360,9 +366,9 @@ class AudioManager:
 
         # Temporary NumPy buffer to compute volume
         self.volume_buffer_int16 = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
-        self.volume_factor_buffer = np.ones(self.BUFFER_SAMPLES, dtype=np.int16)
-        if volume_factor > 0:
-            self.volume_factor_buffer *= int(1 / volume_factor) 
+        # self.volume_factor_buffer = np.ones(self.BUFFER_SAMPLES, dtype=np.int16)
+        # if volume_factor > 0:
+        #     self.volume_factor_buffer *= int(1 / volume_factor) 
 
         # Playback state
         self._is_playing = False
@@ -378,10 +384,10 @@ class AudioManager:
         if self.always_play:
             self._i2s_callback(self)
 
-    def change_volume_factor(self, volume_factor: float):
-        self.volume_factor = volume_factor
-        if self.volume_factor > 0:
-            self.volume_factor_buffer[:] = int(1.0 / self.volume_factor)  # I2S.shift
+    # def change_volume_factor(self, volume_factor: float):
+    #     self.volume_factor = volume_factor
+    #     if self.volume_factor > 0:
+    #         self.volume_factor_buffer[:] = int(1.0 / self.volume_factor)  # I2S.shift
 
     def load_wav(self, wav_file: str, wav_data: Optional[bytearray] = None):
         """Loads WAV file data into memory cache."""
@@ -457,15 +463,23 @@ class AudioManager:
                 # Mix into the target buffer using NumPy addition
                 # Ensure slices match size
                 temp_int16_chunk = loaded_data[current_pos: current_pos + self.BUFFER_SAMPLES]
-                if self.volume_factor > 0:
-                    self.volume_buffer_int16 -= self.volume_buffer_int16
-                    if num_read_samples == self.BUFFER_SAMPLES:
-                        self.volume_buffer_int16 += temp_int16_chunk
-                    else:
-                        volume_buffer = self.volume_buffer_int16[:num_read_samples]
-                        volume_buffer += temp_int16_chunk
-                    self.volume_buffer_int16 //= self.volume_factor_buffer
-                    target_buffer_np += self.volume_buffer_int16
+                # if self.volume_factor > 0:
+                #     self.volume_buffer_int16 -= self.volume_buffer_int16
+                #     if num_read_samples == self.BUFFER_SAMPLES:
+                #         self.volume_buffer_int16 += temp_int16_chunk
+                #     else:
+                #         volume_buffer = self.volume_buffer_int16[:num_read_samples]
+                #         volume_buffer += temp_int16_chunk
+                #     self.volume_buffer_int16 //= self.volume_factor_buffer
+                #     target_buffer_np += self.volume_buffer_int16
+                
+                self.volume_buffer_int16 -= self.volume_buffer_int16
+                if num_read_samples == self.BUFFER_SAMPLES:
+                    self.volume_buffer_int16 += temp_int16_chunk
+                else:
+                    volume_buffer = self.volume_buffer_int16[:num_read_samples]
+                    volume_buffer += temp_int16_chunk
+                target_buffer_np += self.volume_buffer_int16
 
                 total_samples_mixed = max(total_samples_mixed, num_read_samples)  
                 # Update position for this voice (in bytes)
@@ -614,7 +628,7 @@ class AudioManager:
             self.valid_samples = [0, 0]
             self.buffer_to_play_idx = 0
 
-    def get_is_playing(self):
+    def is_playing(self):
         """Returns True if playback is active."""
         return self._is_playing
 
@@ -634,7 +648,7 @@ class MIDIPlayer():
         self.shift_delay_ms = 500
         self.time_multiplayer = 1.0
 
-        if exists(file_path):
+        if exists(file_path):  # TODO: recognize simultaneously play
             start_time_ms = 0
             for event in MidiFile(file_path, reuse_event_object=True):
                 delta_ms = event.delta_us // 1000
@@ -653,7 +667,7 @@ class MIDIPlayer():
         
         self.event_length = len(self.events)
 
-    def play(self, play_func: Callable):
+    def play(self, play_func: Callable) -> bool:  # TODO: return next play time
         if self.playing and self.idx < self.event_length:
             current_time = time.ticks_ms()
             if current_time - self.start_time >= int(self.events[self.idx][0] * self.time_multiplayer) + self.shift_delay_ms:
@@ -736,6 +750,7 @@ def main():
 
 
 def midi_example():
+    import gc
     file_path = "mid/fukakai - KAF - Piano.mid"
 
     time.sleep_ms(1000) # Sleep before starting audio
@@ -744,7 +759,7 @@ def midi_example():
         buffer_samples=1024,
         ibuf=4096,
         always_play=True,
-        volume_factor=0.1
+        # volume_factor=0.1
     )
 
     # Load WAV files into memory first
@@ -768,7 +783,9 @@ def midi_example():
     audio_manager.load_wav("E6", sampler.get_sample("E6", duration=1.8).tobytes())
     audio_manager.load_wav("F6", sampler.get_sample("F6", duration=1.8).tobytes())
     audio_manager.load_wav("D#5", sampler.get_sample("D#5", duration=1.8).tobytes())
-    audio_manager.load_wav("G#5", sampler.get_sample("D#5", duration=1.8).tobytes())
+    audio_manager.load_wav("G#5", sampler.get_sample("G#5", duration=1.8).tobytes())
+
+    gc.collect()
 
     print("Loading complete.")
 
@@ -781,7 +798,7 @@ def midi_example():
         if play:
             audio_manager.play_note(note)
         else:
-            audio_manager.stop_note(note, delay=500)
+            audio_manager.stop_note(note, delay=200)
     play_func = partial(play_note, audio_manager=audio_manager)
 
     count = 0
@@ -811,13 +828,13 @@ def midi_example():
                 # time.sleep_us(event.delta_us)
                 # audio_manager.play_note(note, playtime=playtime)
             else:
-                audio_manager.stop_note(note, delay=500)
+                audio_manager.stop_note(note, delay=200)
                 # time.sleep_us(event.delta_us)
         # on channel event.channel with event.velocity
         elif event.status == umidiparser.NOTE_OFF :
             print("NOTE_OFF", event)
             note = midinumber_to_note(event.note)  # TODO: mode
-            audio_manager.stop_note(note, delay=500)
+            audio_manager.stop_note(note, delay=200)
             # ... stop the note event.note .
         elif event.status == umidiparser.PROGRAM_CHANGE:
             print("PROGRAM_CHANGE", event)

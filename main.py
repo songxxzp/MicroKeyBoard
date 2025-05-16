@@ -68,7 +68,9 @@ class ScreenManager:  # TODO: global logger
             self.enabled = False
             self.prepared = False
 
-    def prepare_animate(self, fps: int = 8):
+    def prepare_animate(self, fps: int = 8) -> bool:
+        if self.tft is None:
+            return False
         self.screen_buf = bytearray(self.width * self.height * 2)
         self.background_buf = bytearray(self.width * self.height * 2)
         self.fbuf = framebuf.FrameBuffer(self.screen_buf, self.width, self.height, framebuf.RGB565)
@@ -97,12 +99,17 @@ class ScreenManager:  # TODO: global logger
 
         self.fbuf.blit(self.bbuf, 0, 0, 0)
         self.tft.blit_buffer(buffer=self.screen_buf, x=0, y=0, width=self.width, height=self.height)
+        return True
 
     def pause_animate(self, pause: bool = False):
+        if self.tft is None:
+            return
         self.pause = (not self.pause) or pause
         print(f"pause animate: {self.pause}")
 
-    def step_animate(self, write: bool = True):
+    def step_animate(self, write: bool = True, texts: List[str] = []):
+        if self.tft is None:
+            return
         if not (self.enabled and self.prepared):
             return
         if self.pause:
@@ -118,11 +125,16 @@ class ScreenManager:  # TODO: global logger
             self.fbuf.blit(self.bbuf, 0, 0, 0)
             self.fbuf.blit(self.abufs[self.frame_index], 120, 0, 0)
             self.frame_index = (self.frame_index + 1) % self.abuf_len
+            start_y = 135 // 2 - 10 * len(texts)
+            for i, text in enumerate(texts):
+                self.fbuf.text(text, (120 - 8 * len(text)) // 2, start_y + i * 10, 0)
             self.next_prepared = True
         else:
             return
     
     def stop_animate(self):
+        if self.tft is None:
+            return
         self.prepared = False
         self.enabled = False
         self.tft.backlight.value(0)
@@ -130,10 +142,12 @@ class ScreenManager:  # TODO: global logger
     def text_lines(self, lines: List[str]):
         if self.tft is None:
             return
+        if self.tft is None:
+            return
         tft = self.tft
         color_values = tuple([255 for _ in lines])
         height_division = tft.height // len(color_values)
-        for i, color_value in enumerate(color_values):
+        for i, color_value in enumerate(color_values):  # TODO: use rect instead of lines
             start_row = i * height_division
             end_row = (i + 1) * height_division
             for row in range(start_row, end_row):
@@ -197,7 +211,7 @@ def main():
         else:
             led_manager.set_pixel(note_key_mapping[note], (1, 1, 1), write=True)
     play_func = partial(play_note, led_manager=virtual_key_board.phsical_key_board.led_manager, note_key_mapping=virtual_key_board.note_key_mapping)
-    midi_player.time_multiplayer = 1 / 0.75
+    midi_player.time_multiplayer = 1
     virtual_key_board.bind_fn_layer_func("ENTER", pressed_function=midi_player.start)
     def stop_midi(midi_player: MIDIPlayer, led_manager: LEDManager):
         midi_player.stop()
@@ -213,11 +227,12 @@ def main():
     virtual_key_board.bind_fn_layer_func("P", pressed_function=screen_manager.pause_animate)
 
     screen_manager.prepare_animate()
+    texts = ["MicroKeyboard", "Piano Mode", getattr(virtual_key_board, "mode", "")]
 
     while True:
         scan_start_us = time.ticks_us()
         midi_player.play(play_func)
-        screen_manager.step_animate()
+        screen_manager.step_animate(texts=texts)
         virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
