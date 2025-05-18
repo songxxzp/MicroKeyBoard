@@ -233,7 +233,10 @@ def main():
         scan_start_us = time.ticks_us()
         midi_player.play(play_func)
         screen_manager.step_animate(texts=texts)
-        virtual_key_board.scan(1)
+        if count % 10 == 0:
+            virtual_key_board.scan(1, activate=True)
+        else:
+            virtual_key_board.scan(1)
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
         # max_scan_gap = max(max_scan_gap, time.ticks_ms() - scan_start_time)

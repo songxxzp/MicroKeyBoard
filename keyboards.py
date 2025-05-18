@@ -14,6 +14,7 @@ from bluetoothkeyboard import BluetoothKeyboard
 from audio import Sampler, AudioManager
 from keys import PhysicalKey, VirtualKey
 from utils import partial, exists, makedirs
+from tca8418 import TCA8418
 
 
 def fn_layer_pressed_function(
@@ -21,9 +22,10 @@ def fn_layer_pressed_function(
     virtual_key: "VirtualKey",
     layer_codes: Optional[Tuple[str]] = None,
     pressed_function: Optional[Callable] = None,
-    original_func: Optional[Callable] = None
+    original_func: Optional[Callable] = None,
+    layer_id: int = 1,
 ):
-    if virtual_key_board.layer == 1:
+    if virtual_key_board.layer == int(layer_id):
         if layer_codes is not None:
             virtual_key.keycode = layer_codes[1]
         if pressed_function is not None:
@@ -37,11 +39,12 @@ def fn_layer_released_function(
     virtual_key: "VirtualKey",
     layer_codes: Optional[Tuple[str]] = None,
     released_function: Optional[Callable] = None,
-    original_func: Optional[Callable] = None
+    original_func: Optional[Callable] = None,
+    layer_id: int = 1,
 ):
     if layer_codes is not None:
         virtual_key.keycode = layer_codes[0]
-    if virtual_key_board.layer == 1:
+    if virtual_key_board.layer == int(layer_id):
         if released_function is not None:
             released_function()
     elif original_func is not None:
@@ -135,7 +138,7 @@ class PhysicalKeyBoard:
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
         self.key_ce = Pin(ce_pin, Pin.OUT, value=0)
         self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
-        self.wakeup_pin = Pin(wakeup_pin, mode=Pin.IN, pull=Pin.PULL_DOWN) if wakeup_pin is not None else None
+        self.wakeup = Pin(wakeup_pin, mode=Pin.IN, pull=Pin.PULL_DOWN) if wakeup_pin is not None else None
         if self.scan_mode == "SPI":
             self.key_clk = Pin(clock_pin)
             self.key_in = Pin(read_pin)
@@ -235,20 +238,23 @@ class PhysicalKeyBoard:
         import esp32
         led_enabled = self.led_manager.enabled
         self.led_manager.led_power.value(0)
-        self.key_power.value(0)
-        self.wakeup_pin.init(mode=Pin.IN, pull=Pin.PULL_DOWN, hold=True)
+        if hasattr(self, "key_power"):
+            self.key_power.value(0)
+        self.wakeup.init(mode=Pin.IN, pull=Pin.PULL_DOWN, hold=True)
         # TODO: close screen, close I2S
         # TODO: keep ble
-        esp32.wake_on_ext0(pin=self.wakeup_pin, level=esp32.WAKEUP_ANY_HIGH)
+        esp32.wake_on_ext0(pin=self.wakeup, level=esp32.WAKEUP_ANY_HIGH)
         print("Preparing sleep")
         time.sleep(1)
         machine.lightsleep()  # TODO: wait for all key released
         print(f"Waking Up. {machine.wake_reason()}")
-        self.key_power.value(1)
+        if hasattr(self, "key_power"):
+            self.key_power.value(1)
         if led_enabled:
             self.led_manager.enable()
 
-    def scan(self, interval_us=1) -> bool:  # TODO: filter
+    def scan(self, interval_us=1, activate: bool = True) -> bool:  # TODO: filter
+        # activate is always True
         self.scan_keys(interval_us=interval_us)
         scan_change = False
         for byte_index in range(self.bytes_needed):
@@ -320,23 +326,169 @@ class PhysicalKeyBoard:
         return False
 
 
+class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
+    def __init__(
+        self,
+        key_config_path: str = "/config/physical_keyboard.json",
+    ):
+        self.key_config = json.load(open(key_config_path))
+
+        ktype = self.key_config.get("ktype", None)
+        sda_pin = self.key_config.get("sda_pin", None)
+        scl_pin = self.key_config.get("scl_pin", None)
+        wakeup_pin = self.key_config.get("wakeup_pin", None)
+        
+        max_keys = self.key_config.get("max_keys", None)
+        keymap_path = self.key_config.get("keymap_path", None)
+        max_light_level = self.key_config.get("max_light_level", None)
+        self.scan_mode = self.key_config.get("scan_mode", None)
+
+        self.tca_addr = 0x34
+    
+        self.i2c = machine.I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
+        self.wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+
+        self.event_pending = False
+        self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.tca_interrupt_handler)
+
+        self.tca = TCA8418(self.i2c, self.tca_addr)
+        ROW_PINS = [TCA8418.R0, TCA8418.R1, TCA8418.R2, TCA8418.R3, TCA8418.R4, TCA8418.R5, TCA8418.R6, TCA8418.R7] # Pins 0-7
+        COL_PINS = [TCA8418.C0, TCA8418.C1, TCA8418.C2, TCA8418.C3, TCA8418.C4, TCA8418.C5, TCA8418.C6, TCA8418.C7, TCA8418.C8, TCA8418.C9] # Pins 8-17
+
+        # --- Configure TCA8418 for Keypad Mode ---
+        # Set all ROW_PINS and COL_PINS to Keypad mode (KPGPIO = 0 for keypad)
+        tca = self.tca
+        all_keypad_pins = ROW_PINS + COL_PINS
+        for pin in all_keypad_pins:
+            # Use set_bit method of keypad_mode register instance
+            tca.keypad_mode.set_bit(pin, True) # Set to Keypad mode (inverted logic)
+
+        # Configure rows as outputs and columns as inputs with pull-ups
+        for pin in ROW_PINS:
+            # Use set_bit method of gpio_direction register instance
+            tca.gpio_direction.set_bit(pin, True) # Rows are outputs
+            # Use set_bit method of pullup register instance
+            tca.pullup.set_bit(pin, False) # No pull-up on outputs (inverted logic)
+
+        for pin in COL_PINS:
+            # Use set_bit method of gpio_direction register instance
+            tca.gpio_direction.set_bit(pin, False) # Columns are inputs
+            # Use set_bit method of pullup register instance
+            tca.pullup.set_bit(pin, True) # Enable pull-up on inputs (inverted logic)
+
+        # Enable Key event FIFO interrupt using the setter method
+        tca.set_key_intenable(True)
+        # Disable GPIO interrupts if only using keypad using the setter method
+        tca.set_GPI_intenable(False)
+
+        # Enable debounce for all relevant pins (typically rows and columns involved in scanning)
+        # The debounce applies per pin. Set debounce=True for all ROW and COL pins.
+        for pin in all_keypad_pins:
+                # Use set_bit method of debounce register instance
+            tca.debounce.set_bit(pin, True) # Enable debounce (inverted logic)
+
+        # Clear any pending interrupts using the clearer methods
+        tca.clear_key_int()
+        tca.clear_gpi_int()
+        tca.clear_overflow_int()
+        tca.clear_keylock_int()
+        tca.clear_cad_int()
+
+        # TODO: reuse below code:
+        self.max_keys = max_keys
+        self.physical_keys = [None for _ in range(max_keys)]
+        keymap_json = json.load(open(keymap_path))
+        if "keymap" in keymap_json:
+            self.keymap_dict = keymap_json["keymap"]
+        else:
+            self.keymap_dict = keymap_json
+        self.used_key_num = len(self.keymap_dict)
+        assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
+        for key_name, key_id in self.keymap_dict.items():
+            self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name, max_light_level=max_light_level)
+        
+        self.led_manager = LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
+
+    def tca_interrupt_handler(self, pin):
+        self.event_pending = True
+
+    def scan(self, interval_us: int = 1, activate: bool = False) -> bool:  # TODO: activate scan
+        if not (self.event_pending or activate):
+            return False
+        time.sleep_us(interval_us)
+        self.event_pending = False
+        tca = self.tca
+        while tca.get_events_count() > 0:
+            event = tca.read_next_event()
+            keycode = event & 0x7F
+            is_press = bool(event & 0x80)
+
+            row = -1
+            col = -1
+            if 0 <= keycode <= 79: # C0-C7
+                col = keycode % 10
+                row = keycode // 10
+
+                physical_key = self.physical_keys[keycode]
+                physical_key.pressed = is_press
+
+                if is_press:
+                    if 'DEBUG' in globals() and DEBUG:
+                        print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
+                    if physical_key.bind_virtual is not None:
+                        physical_key.bind_virtual.press()
+                    else:
+                        if 'DEBUG' in globals() and DEBUG:
+                            print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
+                else:
+                    if physical_key.bind_virtual is not None:
+                        physical_key.bind_virtual.release()
+                    else:
+                        if 'DEBUG' in globals() and DEBUG:
+                            print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
+            elif 80 <= keycode <= 87: # C8
+                row = keycode - 80
+                col = 8
+            elif 90 <= keycode <= 97: # C9
+                row = keycode - 90
+                col = 9
+            else:
+                raise NotImplementedError(f"Get tca8418 keycode: {keycode}")
+            tca.clear_key_int()
+        return True
+
+    def is_pressed(self) -> bool:
+        # TODO
+        return False
+
+    def sleep(self):
+        # TODO
+        return
+
 class VirtualKeyBoard:
     def __init__(self,
         connection_mode: str = "bluetooth",
         mapping_path: str = "/config/virtual_keymaps.json",
+        key_config_path: str = "/config/physical_keyboard.json",
         key_num: int = 68,  # Real used key num.
         max_phiscal_keys: int = 72,
     ):
         # assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
-        self.phsical_key_board = PhysicalKeyBoard(max_keys=max_phiscal_keys)  # TODO: as an arg
-        key_num = max(key_num, self.phsical_key_board.used_key_num)
-        self.key_num = key_num
         if exists(mapping_path):
             self.virtual_key_mappings = json.load(open(mapping_path))
             self.virtual_key_name = self.virtual_key_mappings.get("name", "MicroKeyBoard")
         else:
             self.virtual_key_mappings = None
             self.virtual_key_name = "MicroKeyBoard"
+        ktype = self.virtual_key_mappings.get("ktype", "74hc165")
+        if ktype == "tca8418":
+            self.phsical_key_board = TCA8418PhysicalKeyBoard(key_config_path=key_config_path)  # TODO: as an arg
+        elif ktype == "74hc165":
+            self.phsical_key_board = PhysicalKeyBoard(key_config_path=key_config_path, max_keys=max_phiscal_keys)  # TODO: as an arg
+        else:
+            raise NotImplementedError(f"Not implemented ktype: {ktype}")
+        key_num = max(key_num, self.phsical_key_board.used_key_num)
+        self.key_num = key_num
 
         # editable keyboard state
         self.connection_mode = None
@@ -409,17 +561,33 @@ class VirtualKeyBoard:
         return virtual_keys
 
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
+        for layer_id in self.virtual_key_mappings["layers"]:  # TODO: check conflict
+            for virtual_key in virtual_keys:
+                physical_key = virtual_key.bind_physical
+                layer_i_code_name = self.virtual_key_mappings["layers"][layer_id].get(physical_key.key_name, None)
+                layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_i_code_name, None) if layer_i_code_name is not None else None)
+                if self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"][layer_id]:
+                    virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
+                    virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
+
         for virtual_key in virtual_keys:
             physical_key = virtual_key.bind_physical
-            layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
-            layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None) if layer_1_code_name is not None else None)
-            if physical_key.key_name == "FN":  # create ".py" file or build from file.
+            if physical_key.key_name == "FN":  # TODO: create ".py" file or build from file. Or use Function Mark in keymaps.
                 def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
                     print("change to layer 1")
                     virtual_key_board.layer = 1
                 def fn_released_function(virtual_key_board: "VirtualKeyBoard"):
                     print("change to layer 0")
                     virtual_key_board.layer = 0
+                virtual_key.pressed_function = partial(fn_pressed_function, self)
+                virtual_key.released_function = partial(fn_released_function, self)
+            elif physical_key.key_name == "FN2":
+                def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
+                    print("change to layer 2")
+                    virtual_key_board.layer = 2
+                def fn_released_function(virtual_key_board: "VirtualKeyBoard"):
+                    print("change to layer 0")
+                    virtual_key_board.layer = 0  # TODO: change to last layer
                 virtual_key.pressed_function = partial(fn_pressed_function, self)
                 virtual_key.released_function = partial(fn_released_function, self)
             elif physical_key.key_name == "Q":
@@ -451,21 +619,18 @@ class VirtualKeyBoard:
                     elif original_func:
                         original_func()
                 virtual_key.pressed_function = partial(clear_ble_pressed_function, self, virtual_key.pressed_function)
-            elif self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"]["1"]:
-                virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function)
-                virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function)
 
-    def bind_fn_layer_func(self, key_name: str, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None):
+    def bind_fn_layer_func(self, key_name: str, layer_id: int = 1, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None):
         for virtual_key in self.virtual_keys:
             physical_key = virtual_key.bind_physical
-            layer_1_code_name = self.virtual_key_mappings["layers"]["1"].get(physical_key.key_name, None)
-            layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_1_code_name, None) if layer_1_code_name is not None else None)
+            layer_i_code_name = self.virtual_key_mappings["layers"][str(layer_id)].get(physical_key.key_name, None)
+            layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_i_code_name, None) if layer_i_code_name is not None else None)
             if physical_key.key_name == key_name:  # TODO: build a mapping dict
-                virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function)
-                virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function)
+                virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function, layer_id=layer_id)
+                virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function, layer_id=layer_id)
 
-    def scan(self, interval_us: int = 1):
-        if not self.phsical_key_board.scan(interval_us=interval_us):
+    def scan(self, interval_us: int = 1, activate: bool = False):
+        if not self.phsical_key_board.scan(interval_us=interval_us, activate=activate):
             return
 
         self.keystates.clear()
@@ -493,25 +658,39 @@ class MusicKeyBoard(VirtualKeyBoard):
         mode: str = "C Major",
         note_wav_path: str = "/wav/piano/16000_2s",
         note_cache_path: Optional[str] = "/cache/piano/16000_1.8s",
+        key_config_path: str = "/config/physical_keyboard.json",
         *args,
         **kwargs
     ):
-        if exists(music_mapping_path):
+        if exists(music_mapping_path) and exists(key_config_path):
             self.music_enabled = True
             self.music_mapping_path = music_mapping_path
+            self.sampler = Sampler(note_wav_path)
+            self.music_mappings = json.load(open(self.music_mapping_path))
+            self.mode = mode
+            self.music_mapping = self.music_mappings[mode]
+            key_config = json.load(open(key_config_path))
+            sck_pin, ws_pin, sd_pin, en_pin = 48, 47, 45, 38
+            if "i2s" in key_config:
+                sck_pin = key_config["i2s"].get("sck_pin", None)
+                ws_pin = key_config["i2s"].get("ws_pin", None)
+                sd_pin = key_config["i2s"].get("sd_pin", None)
+                en_pin = key_config["i2s"].get("en_pin", None)
+
             if audio_manager is None:
                 audio_manager = AudioManager(
                     rate=16000,
                     buffer_samples=1024,
                     ibuf=4096,
                     always_play=True,
+                    sck_pin=sck_pin,
+                    ws_pin=ws_pin,
+                    sd_pin=sd_pin,
+                    en_pin=en_pin,
                     # volume_factor=0.1
                 )
+
             self.audio_manager = audio_manager
-            self.sampler = Sampler(note_wav_path)
-            self.music_mappings = json.load(open(self.music_mapping_path))
-            self.mode = mode
-            self.music_mapping = self.music_mappings[mode]
 
             self.note_key_mapping = {}
 
@@ -538,7 +717,7 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.music_mapping = {}
             self.note_key_mapping = {}
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, key_config_path=key_config_path, **kwargs)
 
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         super().build_fn_layer(virtual_keys)
