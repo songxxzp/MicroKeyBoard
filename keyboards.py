@@ -465,6 +465,7 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
         # TODO
         return
 
+
 class VirtualKeyBoard:
     def __init__(self,
         connection_mode: str = "bluetooth",
@@ -568,7 +569,7 @@ class VirtualKeyBoard:
                 layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_i_code_name, None) if layer_i_code_name is not None else None)
                 if self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"][layer_id]:
                     virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
-                    virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
+                    virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function, original_func=virtual_key.released_function, layer_id=int(layer_id))
 
         for virtual_key in virtual_keys:
             physical_key = virtual_key.bind_physical
@@ -760,7 +761,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                             virtual_key.playing_wav_id = self.audio_manager.play_note(note)
                     def released_function(virtual_key: VirtualKey):
                         if hasattr(virtual_key, "playing_wav_id"):
-                            self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=200)
+                            self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=500)
                     virtual_key.pressed_function = partial(pressed_function, self, virtual_key, self.music_mapping[physical_key.key_name])
                     virtual_key.released_function = partial(released_function, virtual_key)
                 else:

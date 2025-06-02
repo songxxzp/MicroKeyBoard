@@ -798,7 +798,7 @@ def midi_example():
         if play:
             audio_manager.play_note(note)
         else:
-            audio_manager.stop_note(note, delay=200)
+            audio_manager.stop_note(note, delay=500)
     play_func = partial(play_note, audio_manager=audio_manager)
 
     count = 0
@@ -828,13 +828,13 @@ def midi_example():
                 # time.sleep_us(event.delta_us)
                 # audio_manager.play_note(note, playtime=playtime)
             else:
-                audio_manager.stop_note(note, delay=200)
+                audio_manager.stop_note(note, delay=500)
                 # time.sleep_us(event.delta_us)
         # on channel event.channel with event.velocity
         elif event.status == umidiparser.NOTE_OFF :
             print("NOTE_OFF", event)
             note = midinumber_to_note(event.note)  # TODO: mode
-            audio_manager.stop_note(note, delay=200)
+            audio_manager.stop_note(note, delay=500)
             # ... stop the note event.note .
         elif event.status == umidiparser.PROGRAM_CHANGE:
             print("PROGRAM_CHANGE", event)

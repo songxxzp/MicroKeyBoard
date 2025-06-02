@@ -14,5 +14,11 @@
     "max_light_level": 32,
     "onstart_light_level": 1,
     "led_data_pin": 9,
-    "led_power_pin": 8
+    "led_power_pin": 8,
+    "i2s": {
+        "sck_pin": 48,
+        "ws_pin": 47,
+        "sd_pin": 45,
+        "en_pin": 38
+    }
 }

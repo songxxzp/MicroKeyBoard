@@ -179,7 +179,7 @@ def main():
         mode = "F Major"
     )
 
-    screen_manager.text_lines(["MicroKeyBoard", "Music Mode", "F Major"])
+    screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
 
     count = 0
     max_scan_gap = 0
