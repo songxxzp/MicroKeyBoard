@@ -2,6 +2,8 @@
 
 MicroKeyBoard is an open-source smart keyboard firmware architecture designed for diverse key-based input devices, leveraging the capabilities of MicroPython.
 
+## Introduction
+
 The increasing integration of advanced hardware (displays, encoders, etc.) in modern keyboards necessitates highly adaptable software support, as diverse user requirements often exceed standard manufacturer offerings. MicroKeyBoard addresses this via a flexible, MicroPython-based firmware **enabling users to directly modify the device's code**, often without the need for a full IDE. This facilitates the implementation of custom functionalities which can be packaged as **modular plugins for easy sharing and adoption within the community**. Furthermore, a novel direction explores leveraging **AI capabilities**, accessible directly on the device or via an external API, for **automatic code modification or generation** based on user requests, thereby enabling **self-updating firmware** and aiming to accelerate development cycles for new hardware and keyboard expansion modules, and foster community creativity.
 
 Furthermore, evolving user interaction paradigms highlight a growing demand for multimodal input methods, such as voice command and gesture recognition. While traditional keyboard firmwares like QMK and ZMK are well-established and stable, they often lack the inherent flexibility and comprehensive support required for seamless integration of such advanced, intelligent functionalities. In response to these challenges and the evolving landscape of input interfaces, we have initiated this project to offer the community a novel intelligent keyboard firmware solution.
@@ -54,13 +56,15 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 ## Versions
 
 ### 0318
-- `/home/song/workspace/MicroKeyBoard/versions/0318/config`
+- `versions/0318/config`
 - The ESP32S3 serves as the MCU, featuring shift register key panels and neopixel LEDs. It can be powered by either AAA or Li-ion batteries, but lacks onboard Li-ion chargers.
-
+- BLE/USB
 
 ### 0413
-- Developing
-
+- `versions/0413/config`
+- ESP32S3 + Shift Registers + USB HUB + Neopixel LEDs + ST7789 Screen + max98357; Li-ion with Chargers.
+- Piano Mode + MicroLive2D
+- BLE/USB
 
 ## Used Libs:
 Download the following libraries and place them into the `lib` folder:

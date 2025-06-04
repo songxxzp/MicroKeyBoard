@@ -20,7 +20,7 @@ from audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to
 from graphics import interpolate
 from bluetoothkeyboard import BluetoothKeyboard
 from utils import partial, exists, makedirs, check_disk_space
-from utils import DEBUG
+from utils import DEBUG, debug_switch, debugging
 # from keys import VirtualKey, PhysicalKey
 from keyboards import PhysicalKeyBoard, VirtualKeyBoard, MusicKeyBoard, LEDManager
 
@@ -95,6 +95,7 @@ class ScreenManager:  # TODO: global logger
         self.frame_index = 0
         self.prepared = True
         self.enabled = True
+        self.tft.sleep_mode(False)
         self.tft.backlight.value(1)
 
         self.fbuf.blit(self.bbuf, 0, 0, 0)
@@ -138,6 +139,7 @@ class ScreenManager:  # TODO: global logger
         self.prepared = False
         self.enabled = False
         self.tft.backlight.value(0)
+        self.tft.sleep_mode(True)
 
     def text_lines(self, lines: List[str]):
         if self.tft is None:
@@ -187,7 +189,11 @@ def main():
     current_time = time.ticks_ms()
 
     for i in range(virtual_key_board.phsical_key_board.led_manager.led_pixels):
-        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 1, 0), write=True)
+        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 0, 0))
+        virtual_key_board.phsical_key_board.led_manager.write_pixels()
+
+    for i in range(virtual_key_board.phsical_key_board.led_manager.led_pixels):
+        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (1, 1, 1), write=True)
         time.sleep(0.01)
 
     midi_player = MIDIPlayer(
@@ -224,10 +230,15 @@ def main():
     virtual_key_board.bind_fn_layer_func("DELETE", released_function=virtual_key_board.phsical_key_board.sleep)
     virtual_key_board.bind_fn_layer_func("S", pressed_function=screen_manager.stop_animate)
     virtual_key_board.bind_fn_layer_func("A", pressed_function=screen_manager.prepare_animate)
-    virtual_key_board.bind_fn_layer_func("P", pressed_function=screen_manager.pause_animate)
+    virtual_key_board.bind_fn_layer_func("D", pressed_function=screen_manager.pause_animate)
+
+    virtual_key_board.bind_fn_layer_func("P", pressed_function=debug_switch)
 
     screen_manager.prepare_animate()
     texts = ["MicroKeyboard", "Piano Mode", getattr(virtual_key_board, "mode", "")]
+
+    last_print_start = time.ticks_ms()
+    last_print_delay = 0
 
     while True:
         scan_start_us = time.ticks_us()
@@ -247,10 +258,13 @@ def main():
         scan_end_us = time.ticks_us()
         time.sleep_us(min(max(990 - scan_end_us + scan_start_us, 0), 990))  # TODO: dynamic speed
 
-        if current_time - start_time >= 1000:
-            print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
+        if debugging() and current_time - start_time >= 1000:
+            last_print_start = time.ticks_ms()
+            print(f"{count}/s, gap: {max_scan_gap}ms, mem: {gc.mem_free()}, prt: {last_print_delay}ms")
             count = 0
             max_scan_gap = 0
+            current_time = time.ticks_ms()
+            last_print_delay = current_time - last_print_start
             start_time = current_time
 
 

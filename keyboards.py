@@ -7,7 +7,7 @@ import neopixel
 
 from machine import Pin, I2S, SPI, SoftSPI
 from typing import Optional, Callable, List, Dict, Tuple, Union
-from utils import DEBUG
+from utils import DEBUG, debugging
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
 from bluetoothkeyboard import BluetoothKeyboard
@@ -291,12 +291,12 @@ class PhysicalKeyBoard:
                             # but good defensive programming.
                             # if not physical_key.pressed:
                             physical_key.pressed = True
-                            if 'DEBUG' in globals() and DEBUG:
+                            if debugging():
                                 print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
                             if physical_key.bind_virtual is not None:
                                 physical_key.bind_virtual.press()
                             else:
-                                if 'DEBUG' in globals() and DEBUG:
+                                if debugging():
                                     print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
 
                         # If state changed and current state is 1 (0 -> 1): Key Released
@@ -304,12 +304,12 @@ class PhysicalKeyBoard:
                             # This check should technically not be needed
                             # if physical_key.pressed:
                             physical_key.pressed = False
-                            if 'DEBUG' in globals() and DEBUG:
+                            if debugging():
                                 print(f"physical({physical_key.key_id}, {physical_key.key_name}) is released at {time.ticks_ms()}.")
                             if physical_key.bind_virtual is not None:
                                 physical_key.bind_virtual.release()
                             else:
-                                if 'DEBUG' in globals() and DEBUG:
+                                if debugging():
                                     print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
 
         self._previous_buffer, self._current_buffer = self._current_buffer, self._previous_buffer
@@ -429,18 +429,18 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
                 physical_key.pressed = is_press
 
                 if is_press:
-                    if 'DEBUG' in globals() and DEBUG:
+                    if debugging():
                         print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
                     if physical_key.bind_virtual is not None:
                         physical_key.bind_virtual.press()
                     else:
-                        if 'DEBUG' in globals() and DEBUG:
+                        if debugging():
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
                 else:
                     if physical_key.bind_virtual is not None:
                         physical_key.bind_virtual.release()
                     else:
-                        if 'DEBUG' in globals() and DEBUG:
+                        if debugging():
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
             elif 97 <= keycode <= 104: # Row GPI Events
                 pass
@@ -500,7 +500,8 @@ class VirtualKeyBoard:
         self.keystates = []
         self.prev_keystates = []
 
-        self.virtual_keys: List[VirtualKey] = self.build_virtual_keys()
+        self.virtual_keys: List[VirtualKey] = None
+        self.build_virtual_keys()
 
     def set_connection_mode(self, connection_mode: str):
         if connection_mode == self.connection_mode:
@@ -552,8 +553,8 @@ class VirtualKeyBoard:
                     released_function=None
                 )
                 virtual_keys.append(virtual_key)
+        self.virtual_keys = virtual_keys
         self.build_fn_layer(virtual_keys)
-        return virtual_keys
 
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         for layer_id in self.virtual_key_mappings["layers"]:  # TODO: check conflict
@@ -714,25 +715,21 @@ class MusicKeyBoard(VirtualKeyBoard):
 
         super().__init__(*args, key_config_path=key_config_path, **kwargs)
 
+    def enable_switch(self):
+        if self.music_enabled:
+            if self.audio_manager.is_playing():
+                self.audio_manager.stop_all()
+            # self.audio_manager.disable_irq()
+            self.music_enabled = False
+        else:
+            # self.audio_manager.enable_irq()
+            if self.audio_manager is not None:
+                self.music_enabled = True
+
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
         super().build_fn_layer(virtual_keys)
-        for virtual_key in virtual_keys:
-            physical_key = virtual_key.bind_physical
-            # TODO: only use for keyboard with audio
-            if physical_key.key_name in ["AUDIO_CALL", "M"]:
-                def sound_pressed_function(virtual_key_board: "MusicKeyBoard", original_func: Callable = None):
-                    if virtual_key_board.layer == 1:
-                        if virtual_key_board.music_enabled:
-                            if virtual_key_board.audio_manager.is_playing():
-                                virtual_key_board.audio_manager.stop_all()
-                            virtual_key_board.music_enabled = False
-                        else:
-                            if self.audio_manager is not None:
-                                virtual_key_board.music_enabled = True
 
-                    elif original_func:
-                        original_func()
-                virtual_key.pressed_function = partial(sound_pressed_function, self, virtual_key.pressed_function)
+        self.bind_fn_layer_func("M", pressed_function=self.enable_switch)
 
     def build_virtual_keys(self):
         virtual_keys: List[VirtualKey] = []
@@ -761,6 +758,6 @@ class MusicKeyBoard(VirtualKeyBoard):
                 else:
                     virtual_key = VirtualKey(key_name=key_code_name, keycode=getattr(KeyCode, key_code_name, None), physical_key=physical_key)
                 virtual_keys.append(virtual_key)
+        self.virtual_keys = virtual_keys
         self.build_fn_layer(virtual_keys)
-        return virtual_keys
 

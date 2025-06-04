@@ -1,0 +1,24 @@
+{
+    "ktype": "74hc165",
+    "scan_mode": "SPI",
+    "clock_pin": 14,
+    "pl_pin": 11,
+    "ce_pin": 13,
+    "read_pin": 12,
+    "power_pin": 21,
+    "wakeup_pin": 7,
+    "max_keys": 72,
+    "keymap_path": "/config/physical_keymap.json",
+    "ltype": "neopixel",
+    "led_pixels": 71,
+    "max_light_level": 32,
+    "onstart_light_level": 1,
+    "led_data_pin": 9,
+    "led_power_pin": 8,
+    "i2s": {
+        "sck_pin": 48,
+        "ws_pin": 47,
+        "sd_pin": 45,
+        "en_pin": 38
+    }
+}

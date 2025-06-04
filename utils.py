@@ -1,7 +1,20 @@
 import os
 
 
-DEBUG = True
+DEBUG = False
+
+
+def debug_switch(mode = None):
+    global DEBUG
+    if mode is None:
+        DEBUG = not DEBUG
+    else:
+        DEBUG = mode
+    print(f"set DEBUG = {DEBUG}")
+    
+
+def debugging() -> bool:
+    return DEBUG
 
 
 def exists(path: str) -> bool:

@@ -1,0 +1,46 @@
+{
+    "name": "MicroKeyBoard45",
+    "ktype": "tca8418",
+    "layers": {
+        "0": {
+            "LEFT_SPACE": "SPACE",
+            "RIGHT_ALT": "LEFT",
+            "RIGHT_UI": "DOWN",
+            "RIGHT_CTRL": "RIGHT"
+        },
+        "1": {
+            "GRAVE": "ESCAPE",
+            "RIGHT_ALT": "LEFT",
+            "RIGHT_UI": "DOWN",
+            "RIGHT_CTRL": "RIGHT",
+            "TAB": "CAPS_LOCK",
+            "DOT": "UP",
+            "QUOTE": "ENTER",
+            "BACKSPACE": "DELETE"
+        },
+        "2": {
+            "LEFT_SPACE": "LEFT_SHIFT",
+            "QUOTE": "ENTER",
+            "GRAVE": "ESCAPE",
+            "Q": "N1",
+            "W": "N2",
+            "E": "N3",
+            "R": "N4",
+            "T": "N5",
+            "Y": "N6",
+            "U": "N7",
+            "I": "N8",
+            "O": "N9",
+            "P": "N0",
+            "OPEN_BRACKET": "MINUS",
+            "CLOSE_BRACKET": "EQUAL",
+            "TAB": "CAPS_LOCK",
+            "BACKSPACE": "DELETE",
+            "RIGHT_ALT": "HOME",
+            "RIGHT_UI": "DOWN",
+            "RIGHT_CTRL": "END",
+            "DOT": "UP",
+            "SLASH": "BACKSLASH"
+        }
+    }
+}

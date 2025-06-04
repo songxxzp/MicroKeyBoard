@@ -7,6 +7,7 @@ from machine import Pin
 from machine import I2S
 from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
+from utils import debugging
 
 from utils import exists, partial
 try:
@@ -389,6 +390,12 @@ class AudioManager:
     #     if self.volume_factor > 0:
     #         self.volume_factor_buffer[:] = int(1.0 / self.volume_factor)  # I2S.shift
 
+    def enable_irq(self):
+        self.audio_out.irq(self._i2s_callback)
+    
+    def disable_irq(self):
+        self.audio_out.irq(None)
+
     def load_wav(self, wav_file: str, wav_data: Optional[bytearray] = None):
         """Loads WAV file data into memory cache."""
         if wav_file in self._loaded_wavs:
@@ -428,7 +435,8 @@ class AudioManager:
                         new_voice_added = True
                         break
                 if not new_voice_added:
-                    print("active_voices fulled")
+                    if debugging():
+                        print("active_voices fulled")
                     oldest_voice = self.active_voices[0]
                     for active_voice in self.active_voices:
                         if oldest_voice.start_time > active_voice.start_time:
@@ -447,13 +455,14 @@ class AudioManager:
             start_time = voice_info.start_time
             current_ms = time.ticks_ms()
 
-            if voice_info.finished:
-                print(f"finished '{voice_id}'  at {current_ms}.")
-                continue
+            # if voice_info.finished:
+            #     print(f"finished '{voice_id}'  at {current_ms}.")
+            #     continue
 
             if voice_id in self.disabled_voices and self.disabled_voices[voice_id] > start_time and current_ms > self.disabled_voices[voice_id]:
                 voice_info.finished = True
-                print(f"stopping '{voice_id}, {voice_id}'  at {current_ms}.")
+                if debugging():
+                    print(f"stopping '{voice_id}, {voice_id}' at {current_ms}.")
                 continue
 
             # Get memory slice for the current chunk (np.int16)
@@ -500,7 +509,8 @@ class AudioManager:
     def _i2s_callback(self, caller):
         """I2S IRQ Callback."""
         if not self._is_playing:
-            print("I2S callback: Not playing.")
+            if debugging():
+                print("I2S callback: Not playing.")
             self.stop_all()
             return
 

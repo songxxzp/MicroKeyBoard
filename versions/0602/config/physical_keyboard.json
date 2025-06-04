@@ -1,0 +1,21 @@
+{
+    "ktype": "tca8418",
+    "scan_mode": "I2C",
+    "sda_pin": 9,
+    "scl_pin": 10,
+    "wakeup_pin": 11,
+    "max_keys": 81,
+    "keymap_path": "/config/physical_keymap.json",
+    "ltype": "neopixel",
+    "led_pixels": 71,
+    "max_light_level": 32,
+    "onstart_light_level": 1,
+    "led_data_pin": 47,
+    "led_power_pin": 48,
+    "i2s": {
+        "sck_pin": 40,
+        "ws_pin": 41,
+        "sd_pin": 39,
+        "en_pin": 38
+    }
+}
