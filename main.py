@@ -7,7 +7,7 @@ import framebuf
 import machine
 
 from typing import List, Dict, Optional, Callable, Tuple, Union
-from machine import Pin, I2S, SPI, SoftSPI
+from machine import Pin, I2S, SPI, SoftSPI, UART
 
 from st7789py import ST7789, color565
 import vga2_bold_16x32 as font
@@ -158,9 +158,95 @@ class ScreenManager:  # TODO: global logger
         return tft
 
 
+class AIManager:
+    def __init__(self):
+        self.uart = UART(1, baudrate=115200, tx=17, rx=18)
+
+    def send(self, text: str, enter: bool = True):
+        if enter:
+            self.uart.write(text.encode('utf-8') + b'\r\n')
+        else:
+            self.uart.write(text.encode('utf-8'))
+
+    def read(self, lenth: int = 1024):
+        reply_data = self.uart.read(lenth)
+        if reply_data is None:
+            reply_str = ""
+        else:
+            reply_str = reply_data.decode()
+        # print(reply_str)
+        return reply_str
+
+    def tty(self):
+        print("ENTER UART TTY:")
+        while True:
+            # time.sleep(0.2)
+            # print(">>> ", end="")
+            # time.sleep(0.2)
+            try:
+                command = input()
+            except KeyboardInterrupt:
+                # TODO: send Ctrl-C
+                print("Use `exit` to exit.")
+            if command == "exit":
+                break
+            self.send(command)
+            last_reply_str = ">>> "
+            for _ in range(10):
+                time.sleep(0.5)
+                reply_str = self.read(1024)
+                print(reply_str, end="")
+                if last_reply_str == "" and reply_str == "":
+                    break
+                last_reply_str = reply_str
+            print()
+        print("EXIT UART TTY:")
+
+    def start_program(self):
+        # wait for boot:
+        last_reply_str = ""
+        flag = False
+        print("Waiting for login. If already logined, Ctrl-C to skip.")
+        try:
+            for _ in range(30):
+                time.sleep(3)
+                reply_str = self.read(1024)
+                print(reply_str)
+                last_reply_str = last_reply_str[-128:] + reply_str
+                if last_reply_str == "":  # already logined
+                    break
+                if last_reply_str.endswith("login: "):
+                    flag = True
+                    break
+        except KeyboardInterrupt:
+            return
+
+        if not flag:
+            print("Connection failed or already logined.")
+            return
+
+        commands_list = [
+            "debian",  # username
+            "rv",  # password
+            "su",  # change to root
+            "rv",  # password
+            "cd /home/debian/workspace",
+            # "LD_LIBRARY_PATH=/home/debian/workspace/cvitek_tpu_sdk/lib python3 inference.py",
+        ]
+
+        # login
+        for command in commands_list:
+            time.sleep(0.5)
+            self.send(command)
+            time.sleep(1)
+            print(self.read(1024))
+
+
 def main():
     check_disk_space()
     time.sleep_ms(1000)
+
+    ai_manager = AIManager()
 
     screen_manager = ScreenManager(
         config_path="/config/screen_config.json"
@@ -170,7 +256,7 @@ def main():
     # virtual_key_board = VirtualKeyBoard()
 
     virtual_key_board = MusicKeyBoard(
-        music_mapping_path="/config/music_keymap.json",
+        music_mapping_path="fake",
         mode = "F Major"
     )
 
@@ -232,6 +318,9 @@ def main():
 
     last_print_start = time.ticks_ms()
     last_print_delay = 0
+
+    ai_manager.start_program()
+    ai_manager.tty()
 
     while True:
         scan_start_us = time.ticks_us()
