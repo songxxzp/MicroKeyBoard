@@ -423,11 +423,7 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
             keycode = event & 0x7F
             is_press = bool(event & 0x80)
 
-            row = -1
-            col = -1
-            if 0 <= keycode <= 79: # C0-C7
-                col = keycode % 10
-                row = keycode // 10
+            if 1 <= keycode <= 80: # Keypad Array
 
                 physical_key = self.physical_keys[keycode]
                 physical_key.pressed = is_press
@@ -446,12 +442,10 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
                     else:
                         if 'DEBUG' in globals() and DEBUG:
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
-            elif 80 <= keycode <= 87: # C8
-                row = keycode - 80
-                col = 8
-            elif 90 <= keycode <= 97: # C9
-                row = keycode - 90
-                col = 9
+            elif 97 <= keycode <= 104: # Row GPI Events
+                pass
+            elif 105 <= (keycode - 1) <= 114: # Column GPI Events
+                pass
             else:
                 raise NotImplementedError(f"Get tca8418 keycode: {keycode}")
             tca.clear_key_int()

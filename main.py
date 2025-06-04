@@ -245,7 +245,7 @@ def main():
         max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
         current_time = time.ticks_ms()
         scan_end_us = time.ticks_us()
-        time.sleep_us(min(max(990 - scan_end_us + scan_start_us, 0), 1000))  # TODO: dynamic speed
+        time.sleep_us(min(max(990 - scan_end_us + scan_start_us, 0), 990))  # TODO: dynamic speed
 
         if current_time - start_time >= 1000:
             print(f"scan speed: {count}/s, gap {max_scan_gap}ms, mem_free: {gc.mem_free()}")
