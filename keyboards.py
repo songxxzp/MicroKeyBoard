@@ -7,7 +7,7 @@ import neopixel
 
 from machine import Pin, I2S, SPI, SoftSPI
 from typing import Optional, Callable, List, Dict, Tuple, Union
-from utils import DEBUG, debugging
+from utils import DEBUG, debugging, debug_switch
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
 from bluetoothkeyboard import BluetoothKeyboard
@@ -418,13 +418,14 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
         time.sleep_us(interval_us)
         self.event_pending = False
         tca = self.tca
+        event_flag = False
         while tca.get_events_count() > 0:
             event = tca.read_next_event()
             keycode = event & 0x7F
             is_press = bool(event & 0x80)
 
             if 1 <= keycode <= 80: # Keypad Array
-
+                event_flag = True
                 physical_key = self.physical_keys[keycode]
                 physical_key.pressed = is_press
 
@@ -449,7 +450,7 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
             else:
                 raise NotImplementedError(f"Get tca8418 keycode: {keycode}")
             tca.clear_key_int()
-        return True
+        return event_flag
 
     def is_pressed(self) -> bool:
         # TODO
@@ -457,6 +458,18 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
 
     def sleep(self):
         # TODO
+        import esp32
+        led_enabled = self.led_manager.enabled
+        self.led_manager.led_power.value(0)
+        # TODO: close screen, close I2S
+        # TODO: keep ble
+        print("Preparing sleep")
+        time.sleep(1)
+        esp32.wake_on_ext0(pin=self.wakeup, level=esp32.WAKEUP_ALL_LOW)
+        machine.lightsleep()  # TODO: wait for all key released
+        print(f"Waking Up. {machine.wake_reason()}")
+        if led_enabled:
+            self.led_manager.enable()
         return
 
 
@@ -531,8 +544,7 @@ class VirtualKeyBoard:
             self.interface = self.ble_interface
         elif self.connection_mode == "debug":
             # TODO: DebugKeyBoard class
-            global DEBUG
-            DEBUG = True
+            debug_switch(True)
             self.interface = None
             print("Enabled DEBUG MODE")
         else:
@@ -641,7 +653,7 @@ class VirtualKeyBoard:
         if self.keystates != self.prev_keystates:
             self.prev_keystates.clear()
             self.prev_keystates.extend(self.keystates)
-            if DEBUG:
+            if debugging():
                 print(self.keystates)
             if self.interface is not None:
                 self.interface.send_keys(self.keystates)

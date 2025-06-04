@@ -244,7 +244,7 @@ def main():
         scan_start_us = time.ticks_us()
         midi_player.play(play_func)
         screen_manager.step_animate(texts=texts)
-        if count % 10 == 0:
+        if count % 8 == 0:
             virtual_key_board.scan(1, activate=True)
         else:
             virtual_key_board.scan(1)

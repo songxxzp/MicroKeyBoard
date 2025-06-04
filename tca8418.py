@@ -108,6 +108,9 @@ class TCA8418:
     def __init__(self, i2c_bus: machine.I2C, address: int = TCA8418_I2CADDR_DEFAULT) -> None:
         self._i2c = i2c_bus
         self._addr = address
+        self._write_buffer = bytearray(2)
+        self._read_addr_buffer = bytearray(1)
+        self._read_data_buffer = bytearray(1)
 
         # --- Register access using explicit getters and setters ---
 
@@ -266,7 +269,10 @@ class TCA8418:
     def _write_reg(self, addr: int, val: int) -> None:
         # TCA8418 Write Operation: START -> Addr + W -> ACK -> RegAddr -> ACK -> Data -> ACK -> STOP
         try:
-            self._i2c.writeto(self._addr, bytes([addr, val]))
+            # self._i2c.writeto(self._addr, bytes([addr, val]))
+            self._write_buffer[0] = addr
+            self._write_buffer[1] = val
+            self._i2c.writeto(self._addr, self._write_buffer)
         except OSError as e:
             print("I2C write error:", e)
             # Handle error appropriately
@@ -274,10 +280,16 @@ class TCA8418:
     def _read_reg(self, addr: int) -> int:
         # TCA8418 Read Operation: START -> Addr + W -> ACK -> RegAddr -> ACK -> START -> Addr + R -> ACK -> Data -> NACK -> STOP
         try:
-            buffer = bytearray(1)
-            self._i2c.writeto(self._addr, bytes([addr])) # Send register address
-            self._i2c.readfrom_into(self._addr, buffer) # Read 1 byte into buffer
-            return buffer[0]
+            # buffer = bytearray(1)
+            # self._i2c.writeto(self._addr, bytes([addr])) # Send register address
+            # self._i2c.readfrom_into(self._addr, buffer) # Read 1 byte into buffer
+            # return buffer[0]
+
+            read_data_buffer = self._read_data_buffer
+            self._read_addr_buffer[0] = addr
+            self._i2c.writeto(self._addr, self._read_addr_buffer) # Send register address
+            self._i2c.readfrom_into(self._addr, read_data_buffer) # Read 1 byte into buffer
+            return read_data_buffer[0]
         except OSError as e:
             print("I2C read error:", e)
             # Handle error appropriately
