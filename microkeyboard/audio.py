@@ -3,13 +3,11 @@ import os
 
 import umidiparser
 
-from machine import Pin
-from machine import I2S
+from machine import Pin, I2S
 from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
-from utils import debugging
+from microkeyboard.utils import debugging, exists, partial
 
-from utils import exists, partial
 try:
     import numpy as np
 except:

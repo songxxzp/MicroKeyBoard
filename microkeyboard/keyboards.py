@@ -7,14 +7,13 @@ import neopixel
 
 from machine import Pin, I2S, SPI, SoftSPI
 from typing import Optional, Callable, List, Dict, Tuple, Union
-from utils import DEBUG, debugging, debug_switch
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
-from bluetoothkeyboard import BluetoothKeyboard
-from audio import Sampler, AudioManager
-from keys import PhysicalKey, VirtualKey
-from utils import partial, exists, makedirs
-from tca8418 import TCA8418
+from microkeyboard.utils import debugging, debug_switch, partial, exists, makedirs
+from microkeyboard.bluetoothkeyboard import BluetoothKeyboard
+from microkeyboard.audio import Sampler, AudioManager
+from microkeyboard.keys import PhysicalKey, VirtualKey
+from microkeyboard.tca8418 import TCA8418
 
 
 def fn_layer_pressed_function(

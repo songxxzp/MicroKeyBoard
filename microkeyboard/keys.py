@@ -2,7 +2,7 @@ import random
 import time
 
 from typing import Optional, Callable
-from utils import DEBUG
+from microkeyboard.utils import debugging
 
 
 class VirtualKey:
@@ -36,11 +36,11 @@ class VirtualKey:
         self.bind_physical = None
 
     def default_pressed_function(self):
-        if DEBUG:
+        if debugging():
             print(f"virtual({self.keycode}, {self.key_name}) is pressed.")
 
     def default_released_function(self):
-        if DEBUG:
+        if debugging():
             print(f"virtual({self.keycode}, {self.key_name}) is released.")
 
     # TODO: @property

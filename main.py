@@ -2,13 +2,9 @@ import os
 import time
 import json
 import random
-import neopixel
-import usb.device
 import gc
 import framebuf
 import machine
-from ulab import numpy as np
-import micropython
 
 from typing import List, Dict, Optional, Callable, Tuple, Union
 from machine import Pin, I2S, SPI, SoftSPI
@@ -16,13 +12,10 @@ from machine import Pin, I2S, SPI, SoftSPI
 from st7789py import ST7789, color565
 import vga2_bold_16x32 as font
 
-from audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
-from graphics import interpolate
-from bluetoothkeyboard import BluetoothKeyboard
-from utils import partial, exists, makedirs, check_disk_space
-from utils import DEBUG, debug_switch, debugging
-# from keys import VirtualKey, PhysicalKey
-from keyboards import PhysicalKeyBoard, VirtualKeyBoard, MusicKeyBoard, LEDManager
+from microkeyboard.audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
+from microkeyboard.graphics import interpolate
+from microkeyboard.utils import partial, exists, makedirs, check_disk_space, debug_switch, debugging
+from microkeyboard.keyboards import PhysicalKeyBoard, VirtualKeyBoard, MusicKeyBoard, LEDManager
 
 
 class ScreenManager:  # TODO: global logger
