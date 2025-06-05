@@ -627,18 +627,21 @@ class VirtualKeyBoard:
                         original_func()
                 virtual_key.pressed_function = partial(clear_ble_pressed_function, self, virtual_key.pressed_function)
 
-    def bind_fn_layer_func(self, key_name: str, layer_id: int = 1, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None):
+    def bind_fn_layer_func(self, key_name: str, layer_id: int = 1, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None) -> bool:
+        bind_flag = False
         for virtual_key in self.virtual_keys:
             physical_key = virtual_key.bind_physical
             layer_i_code_name = self.virtual_key_mappings["layers"][str(layer_id)].get(physical_key.key_name, None)
             layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_i_code_name, None) if layer_i_code_name is not None else None)
             if physical_key.key_name == key_name:  # TODO: build a mapping dict
+                bind_flag = True
                 virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function, layer_id=layer_id)
                 virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function, layer_id=layer_id)
+        return bind_flag
 
-    def scan(self, interval_us: int = 1, activate: bool = False):
+    def scan(self, interval_us: int = 1, activate: bool = False, return_pressed: bool = False) -> Optional[List[str]]:
         if not self.phsical_key_board.scan(interval_us=interval_us, activate=activate):
-            return
+            return None
 
         self.keystates.clear()
         self.pressed_keys.clear()
@@ -649,6 +652,8 @@ class VirtualKeyBoard:
                 # self.keystates.append(virtual_key.keycode)
         self.pressed_keys.sort(key=lambda k:k.press_time, reverse=True)
         self.keystates = [k.keycode for k in self.pressed_keys[:6]]  # TODO: Don't use list.
+        if return_pressed:
+            pressed_key_names = [k.key_name for k in self.pressed_keys[:6]]
         if self.keystates != self.prev_keystates:
             self.prev_keystates.clear()
             self.prev_keystates.extend(self.keystates)
@@ -656,6 +661,8 @@ class VirtualKeyBoard:
                 print(self.keystates)
             if self.interface is not None:
                 self.interface.send_keys(self.keystates)
+        if return_pressed:
+            return pressed_key_names
 
 
 class MusicKeyBoard(VirtualKeyBoard):

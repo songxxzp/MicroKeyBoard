@@ -137,30 +137,26 @@ class ScreenManager:  # TODO: global logger
     def text_lines(self, lines: List[str]):
         if self.tft is None:
             return
-        if self.tft is None:
+        if not self.enabled:
             return
         tft = self.tft
-        color_values = tuple([255 for _ in lines])
-        height_division = tft.height // len(color_values)
-        for i, color_value in enumerate(color_values):  # TODO: use rect instead of lines
-            start_row = i * height_division
-            end_row = (i + 1) * height_division
-            for row in range(start_row, end_row):
-                rgb_color = [0 if idx != i else int(interpolate(0, color_value, row - start_row, height_division)) for idx in range(3)]
-                color = color565(rgb_color)
+        height_division = 32
+        for i, name in enumerate(lines):  # TODO: use rect instead of lines
+            if name is not None:
+                name = name + " " * max(0, 16 - len(name))
+                start_row = i * height_division
+                end_row = (i + 1) * height_division
 
-            for row in range(start_row, end_row):
-                tft.hline(0, row, tft.width, color)
-            name = lines[i]
-            text_x = (tft.width - font.WIDTH * len(name)) // 2
-            text_y = start_row + (end_row - start_row - font.HEIGHT) // 2
-            tft.text(font, name, text_x, text_y, 0xFFFF, color)
+                text_x = 0
+                text_y = start_row + (end_row - start_row - font.HEIGHT) // 2
+                tft.text(font, name, text_x, text_y, 0xFFFF, 0x0000)
         return tft
 
 
 class AIManager:
     def __init__(self):
         self.uart = UART(1, baudrate=115200, tx=17, rx=18)
+        self.cli_buffer = ""
 
     def send(self, text: str, enter: bool = True):
         if enter:
@@ -175,6 +171,9 @@ class AIManager:
         else:
             reply_str = reply_data.decode()
         # print(reply_str)
+        self.cli_buffer += reply_str
+        if len(self.cli_buffer) > 1023:
+            self.cli_buffer = self.cli_buffer[-512:]
         return reply_str
 
     def tty(self):
@@ -188,13 +187,17 @@ class AIManager:
             except KeyboardInterrupt:
                 # TODO: send Ctrl-C
                 print("Use `exit` to exit.")
-            if command == "exit":
+            if command == "exit" or command == "@exit":
                 break
+            if command == "@show":
+                self.read(1024)
+                print(self.cli_buffer)
+                continue
             self.send(command)
             last_reply_str = ">>> "
             for _ in range(10):
                 time.sleep(0.5)
-                reply_str = self.read(1024)
+                reply_str = self.read(2048)
                 print(reply_str, end="")
                 if last_reply_str == "" and reply_str == "":
                     break
@@ -230,17 +233,52 @@ class AIManager:
             "rv",  # password
             "su",  # change to root
             "rv",  # password
-            "cd /home/debian/workspace",
-            # "LD_LIBRARY_PATH=/home/debian/workspace/cvitek_tpu_sdk/lib python3 inference.py",
+            "cd /home/debian/workspace/cvi_klm && python inference_serve.py 2>/dev/null",
+            # "source /home/debian/envs/base/bin/activate"
+            # "LD_LIBRARY_PATH=/home/debian/workspace/cvitek_tpu_sdk/lib python3 inference_serve.py",
         ]
 
         # login
         for command in commands_list:
             time.sleep(0.5)
             self.send(command)
-            time.sleep(1)
-            print(self.read(1024))
+            time.sleep(2)
+            print(self.read(4096))
+        
+        print("Waiting for start")
+        flag = False
+        for _ in range(90):
+            time.sleep(3)
+            reply_str = self.read(4096)
+            print(reply_str)
+            last_reply_str = last_reply_str[-128:] + reply_str
+            if "## READY ##" in last_reply_str:
+                flag = True
+                break
+        if not flag:
+            print("Prediction start failed")
+        print(self.read(4096))
 
+    def ai_clear(self):
+        self.send("@clear", enter=True)
+
+    def predict(self, prefix: str, screen_manager: ScreenManager, accept=True) -> str:
+        if accept:
+            print("In predict")
+        self.send("@pred", enter=True)
+        # prefix = ""
+        time.sleep(2)
+        reply = self.read(1024)
+        print(f"self.cli_buffer: {self.cli_buffer}")
+        if accept:
+            print(f"direct reply: {reply}")
+        pred = self.cli_buffer.strip().split('\n')[-1].strip()
+        print(f"pred: {pred}")
+        screen_manager.text_lines([None, None, f"Pred: {pred}"])
+        if accept:
+            self.send("@accept", enter=True)
+            reply = self.read(1024)
+        return pred
 
 def main():
     check_disk_space()
@@ -260,7 +298,7 @@ def main():
         mode = "F Major"
     )
 
-    screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
+    screen_manager.text_lines(["MicroKeyBoard", "AI Mode"])
 
     count = 0
     max_scan_gap = 0
@@ -313,23 +351,94 @@ def main():
 
     virtual_key_board.bind_fn_layer_func("P", pressed_function=debug_switch)
 
-    screen_manager.prepare_animate()
-    texts = ["MicroKeyboard", "Piano Mode", getattr(virtual_key_board, "mode", "")]
+    # screen_manager.prepare_animate()
+    # texts = ["MicroKeyboard", "Piano Mode", getattr(virtual_key_board, "mode", "")]
 
-    last_print_start = time.ticks_ms()
-    last_print_delay = 0
 
     ai_manager.start_program()
-    ai_manager.tty()
+    # ai_manager.tty()
+
+    last_pressed_key_names = []
+    current_string = ""
+    send_string = ""
+
+    virtual_key_board.bind_fn_layer_func("AUDIO_CALL", layer_id=0, pressed_function=partial(ai_manager.predict, prefix=send_string, screen_manager=screen_manager))
+    virtual_key_board.bind_fn_layer_func("AUDIO_CALL", layer_id=1, pressed_function=partial(ai_manager.tty))
+
+    white_list_char = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".lower()
+    white_list_sign = " ,.?;:'\\|[]{}()_-+=1234567890!@#$%^&*()\""
+    white_list_char += white_list_sign
+
+    screen_manager.tft.fill(0x0000)
+    screen_manager.text_lines(["Pres: ", "Pref: ", ""])
+    key_name_mapping = {
+        "SPACE": " ",
+        "N0": "0",
+        "N1": "1",
+        "N2": "2",
+        "N3": "3",
+        "N4": "4",
+        "N5": "5",
+        "N6": "6",
+        "N7": "7",
+        "N8": "8",
+        "N9": "9",
+        "COMMA": ",",
+        "DOT": ".",
+        "MINUS": "-",
+        "EQUAL": "=",
+    }
+    
+    last_print_start = time.ticks_ms()
+    last_print_delay = 0
 
     while True:
         scan_start_us = time.ticks_us()
         midi_player.play(play_func)
-        screen_manager.step_animate(texts=texts)
+        # screen_manager.step_animate(texts=texts)
         if count % 8 == 0:
-            virtual_key_board.scan(1, activate=True)
+            pressed_key_names = virtual_key_board.scan(1, activate=True, return_pressed=True)
         else:
-            virtual_key_board.scan(1)
+            pressed_key_names = virtual_key_board.scan(1, return_pressed=True)
+        # if count % 128 == 0:
+        #     ai_manager.predict("", screen_manager, accept=False)
+
+        if pressed_key_names is not None:
+            change_flag = False
+            clean_pred_flag = False
+            show_pressed_names = ""
+            new_string = ""
+            # pressed
+            for key_name in pressed_key_names:
+                show_key_name = key_name_mapping[key_name] if key_name in key_name_mapping else key_name.lower()
+                show_pressed_names += show_key_name
+                if key_name not in last_pressed_key_names:
+                    change_flag = True
+                    if show_key_name in white_list_char:
+                        clean_pred_flag = True
+                        new_string += show_key_name
+            # released
+            for key_name in last_pressed_key_names:
+                if key_name not in pressed_key_names:
+                    change_flag = True
+            # update
+            if change_flag:
+                current_string = current_string + new_string
+                send_string += new_string
+                current_string = current_string[-8:]
+                if clean_pred_flag:
+                    screen_manager.text_lines(["Pres: " + show_pressed_names, "Pref: " + current_string, ""])
+                else:
+                    screen_manager.text_lines(["Pres: " + show_pressed_names, "Pref: " + current_string])
+                print("Pres: " + show_pressed_names + "\nPref: " + current_string)
+                last_pressed_key_names = pressed_key_names
+
+                # send prefix to tpu using uart
+                for c in new_string:
+                    ai_manager.send(f"#{c}", enter=True)
+                # predict_str = ai_manager.predict(send_string)
+                # send_string = ""
+
         # virtual_key_board.phsical_key_board.scan(0)
         # virtual_key_board.phsical_key_board.scan_keys(0)
         # max_scan_gap = max(max_scan_gap, time.ticks_ms() - scan_start_time)
