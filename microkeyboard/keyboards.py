@@ -3,7 +3,6 @@ import json
 import machine
 import gc
 import usb
-import neopixel
 
 from machine import Pin, I2S, SPI, SoftSPI
 from typing import Optional, Callable, List, Dict, Tuple, Union
@@ -13,7 +12,8 @@ from microkeyboard.utils import debugging, debug_switch, partial, exists, makedi
 from microkeyboard.bluetoothkeyboard import BluetoothKeyboard
 from microkeyboard.audio import Sampler, AudioManager
 from microkeyboard.keys import PhysicalKey, VirtualKey
-from microkeyboard.tca8418 import TCA8418
+from microkeyboard.module.tca8418 import TCA8418
+from microkeyboard.led import LEDManager
 
 
 def fn_layer_pressed_function(
@@ -48,60 +48,6 @@ def fn_layer_released_function(
             released_function()
     elif original_func is not None:
         original_func()
-
-
-class LEDManager:
-    def __init__(
-        self,
-        led_config: Dict,
-        ledmap: Optional[Dict[str, int]] = {}
-    ):
-        self.ltype = led_config.get("ltype", "neopixel")
-        self.led_pixels = led_config.get("led_pixels", 68)
-        self.max_light_level = led_config.get("max_light_level", 16)
-        self.onstart_light_level = led_config.get("onstart_light_level", 1)
-        self.led_data_pin = led_config.get("led_data_pin")
-        self.led_power_pin = led_config.get("led_power_pin")
-        self.ledmap = ledmap
-        
-        self.led_power = Pin(self.led_power_pin, Pin.OUT)
-        self.enabled = True
-        self.led_power.value(self.enabled)
-
-        self.pixels = neopixel.NeoPixel(Pin(self.led_data_pin, Pin.OUT), self.led_pixels)
-        # for i in range(self.led_pixels):
-        #     self.pixels[i] = (self.onstart_light_level, self.onstart_light_level, self.onstart_light_level)
-        self.pixels.fill((self.onstart_light_level, self.onstart_light_level, self.onstart_light_level))
-        self.pixels.write()
-
-    def disable(self):
-        self.enabled = False
-        self.led_power.value(0)
-
-    def enable(self):
-        self.enabled = True
-        self.led_power.value(1)
-        self.write_pixels()
-    
-    def switch(self):
-        self.enabled = not self.enabled
-        self.led_power.value(self.enabled)
-        if self.enabled:
-            self.write_pixels()
-
-    def clear(self):
-        self.pixels.fill((0, 0, 0))
-        self.pixels.write()
-
-    def set_pixel(self, i: Union[int, str], color: Tuple[int], write: bool = False):
-        if isinstance(i, str):
-            i = self.ledmap[i]
-        self.pixels[i] = tuple(min(l, self.max_light_level) for l in color)
-        if write:
-            self.pixels.write()
-
-    def write_pixels(self):
-        self.pixels.write()
 
 
 class PhysicalKeyBoard:
@@ -408,7 +354,7 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
         
         self.led_manager = LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
 
-    def tca_interrupt_handler(self, pin):
+    def tca_interrupt_handler(self, pin: Pin):
         self.event_pending = True
 
     def scan(self, interval_us: int = 1, activate: bool = False) -> bool:  # TODO: activate scan

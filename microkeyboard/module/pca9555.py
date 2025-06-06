@@ -29,6 +29,14 @@ class PCA9555:
         self._port0_config = 0xFF # Default all pins to input
         self._port1_config = 0xFF # Default all pins to input
 
+        # set buffers
+        self.read_data_buffer = bytearray(1)
+        self.write_data_buffer = bytearray(2)
+        self.gpio_buffer = bytearray(2)
+
+        # attrs
+        # self._last_read_tick
+
         # Scan for I2C devices to confirm PCA9555 presence
         devices = self.i2c.scan()
         if self.address not in devices:
@@ -40,33 +48,40 @@ class PCA9555:
         
         print(f"PCA9555 initialized at I2C address 0x{self.address:02x}")
 
-    def _write_register(self, register, value):
+    def _write_register(self, register: int, value: int):
         """
         Writes a byte value to a PCA9555 register.
         """
         try:
-            self.i2c.writeto(self.address, bytes([register, value]))
+            self.write_data_buffer[0] = register
+            self.write_data_buffer[1] = value
+            self.i2c.writeto(self.address, self.write_data_buffer)
+            # self.i2c.writeto(self.address, bytes([register, value]))
         except OSError as e:
             raise OSError(f"Failed to write to PCA9555 register 0x{register:02x}: {e}")
 
-    def _read_register(self, register):
+    def _read_register(self, register: int):
         """
         Reads a byte value from a PCA9555 register.
         """
         try:
-            self.i2c.writeto(self.address, bytes([register]))
-            data = self.i2c.readfrom(self.address, 1)
-            return data[0]
+            self.write_data_buffer[0] = register
+            self.i2c.writeto(self.address, self.write_data_buffer[:1])
+            self.i2c.readfrom_into(self.address, self.read_data_buffer)
+            return self.read_data_buffer[0]
+            # self.i2c.writeto(self.address, bytes([register]))
+            # data = self.i2c.readfrom(self.address, 1)
+            # return data[0]
         except OSError as e:
             raise OSError(f"Failed to read from PCA9555 register 0x{register:02x}: {e}")
 
-    def _set_bit(self, value, bit):
+    def _set_bit(self, value: int, bit: int) -> int:
         """
         Sets a specific bit in a given byte value.
         """
         return value | (1 << bit)
 
-    def _clear_bit(self, value, bit):
+    def _clear_bit(self, value: int, bit: int) -> int:
         """
         Clears a specific bit in a given byte value.
         """
@@ -128,7 +143,7 @@ class PCA9555:
         # print(f"Port {port_num} configuration set to 0x{config_byte:02x}")
 
 
-    def digital_write(self, pin, value):
+    def digital_write(self, pin: int, value: bool):
         """
         Sets the digital level (HIGH/LOW) for a single output pin.
 
@@ -161,7 +176,7 @@ class PCA9555:
         
         # print(f"Pin {pin} set to {value}")
 
-    def digital_read(self, pin):
+    def digital_read(self, pin: int) -> bool:
         """
         Reads the digital level for a single input pin.
 
@@ -182,9 +197,14 @@ class PCA9555:
         else: # port == 1
             input_value = self._read_register(self.INPUT_PORT_1)
         
+        if input_value == 1:
+            self.gpio_buffer[port] = self._set_bit(self.gpio_buffer[port], bit)
+        else:
+            self.gpio_buffer[port] = self._clear_bit(self.gpio_buffer[port], bit)
+
         return (input_value >> bit) & 0x01
 
-    def write_output_port(self, port_num, value):
+    def write_output_port(self, port_num: int, value: int):
         """
         Sets the digital levels for an entire output port.
 
@@ -203,7 +223,7 @@ class PCA9555:
         
         # print(f"Port {port_num} output set to 0x{value:02x}")
 
-    def read_input_port(self, port_num):
+    def read_input_port(self, port_num: int) -> int:
         """
         Reads the digital levels for an entire input port.
 
@@ -217,11 +237,15 @@ class PCA9555:
             raise ValueError("Port number must be 0 or 1.")
         
         if port_num == 0:
-            return self._read_register(self.INPUT_PORT_0)
+            input_value = self._read_register(self.INPUT_PORT_0)
         else:
-            return self._read_register(self.INPUT_PORT_1)
+            input_value = self._read_register(self.INPUT_PORT_1)
 
-    def set_polarity_inversion(self, port_num, inversion_byte):
+        self.gpio_buffer[port_num] = input_value
+
+        return input_value
+
+    def set_polarity_inversion(self, port_num: int, inversion_byte):
         """
         Configures input polarity inversion for a port.
 
@@ -241,7 +265,7 @@ class PCA9555:
         
         # print(f"Port {port_num} polarity inversion set to 0x{inversion_byte:02x}")
 
-    def get_polarity_inversion(self, port_num):
+    def get_polarity_inversion(self, port_num: int):
         """
         Gets the current input polarity inversion settings for a port.
 
@@ -258,6 +282,10 @@ class PCA9555:
             return self._read_register(self.POLARITY_INVERSION_PORT_0)
         else:
             return self._read_register(self.POLARITY_INVERSION_PORT_1)
+    
+    def scan(self, pin: Pin):
+        self.read_input_port(0)
+        self.read_input_port(1)
 
 
 if __name__ == "__main__":
