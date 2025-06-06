@@ -4,7 +4,7 @@ import machine
 import gc
 import usb
 
-from machine import Pin, I2S, SPI, SoftSPI
+from machine import Pin, I2S, SPI, SoftSPI, I2C
 from typing import Optional, Callable, List, Dict, Tuple, Union
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
@@ -13,6 +13,7 @@ from microkeyboard.bluetoothkeyboard import BluetoothKeyboard
 from microkeyboard.audio import Sampler, AudioManager
 from microkeyboard.keys import PhysicalKey, VirtualKey
 from microkeyboard.module.tca8418 import TCA8418
+from microkeyboard.module.pca9555 import PCA9555
 from microkeyboard.led import LEDManager
 
 
@@ -53,7 +54,32 @@ def fn_layer_released_function(
 class PhysicalKeyBoard:
     def __init__(
         self,
-        key_config_path: str = "/config/physical_keyboard.json",
+        key_config: str = "/config/physical_keyboard.json"
+    ):
+        if isinstance(key_config, str):
+            self.key_config = json.load(open(key_config))
+        elif isinstance(key_config, dict):
+            self.key_config = key_config
+        else:
+            raise NotImplementedError(type(key_config))
+
+    def is_pressed(self) -> bool:
+        return False
+
+    def sleep(self):
+        return
+    
+    def scan(self, interval_us=1, activate: bool = True) -> bool:
+        return False
+
+    def is_pressed(self) -> bool:
+        return False
+
+
+class ShiftRegisterKeyBoard(PhysicalKeyBoard):
+    def __init__(
+        self,
+        key_config: str = "/config/physical_keyboard.json",
         ktype: Optional[str] = None,
         clock_pin: Optional[int] = None,
         pl_pin: Optional[int] = None,
@@ -66,7 +92,7 @@ class PhysicalKeyBoard:
         max_light_level: Optional[int] = None,
         scan_mode: Optional[int] = None,
     ):
-        self.key_config = json.load(open(key_config_path))
+        super().__init__(key_config=key_config)
 
         ktype = ktype or self.key_config.get("ktype", None)
         clock_pin = pl_pin or self.key_config.get("clock_pin", None)
@@ -271,12 +297,15 @@ class PhysicalKeyBoard:
         return False
 
 
-class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
+class TCA8418KeyBoard(PhysicalKeyBoard):
     def __init__(
         self,
-        key_config_path: str = "/config/physical_keyboard.json",
+        key_config: str = "/config/physical_keyboard.json",
+        wakeup: Optional[Pin] = None,
+        i2c: Optional[I2C] = None,
+        i2c_addr: Optional[int] = None
     ):
-        self.key_config = json.load(open(key_config_path))
+        super().__init__(key_config=key_config)
 
         ktype = self.key_config.get("ktype", None)
         sda_pin = self.key_config.get("sda_pin", None)
@@ -288,13 +317,15 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
         max_light_level = self.key_config.get("max_light_level", None)
         self.scan_mode = self.key_config.get("scan_mode", None)
 
-        self.tca_addr = 0x34
-    
-        self.i2c = machine.I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
-        self.wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
-
         self.event_pending = False
-        self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.tca_interrupt_handler)
+
+        self.tca_addr = i2c_addr or 0x34
+        self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
+        if wakeup is None:
+            self.wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+            self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.tca_interrupt_handler)
+        else:
+            self.wakeup = wakeup
 
         self.tca = TCA8418(self.i2c, self.tca_addr)
         ROW_PINS = [TCA8418.R0, TCA8418.R1, TCA8418.R2, TCA8418.R3, TCA8418.R4, TCA8418.R5, TCA8418.R6, TCA8418.R7] # Pins 0-7
@@ -369,7 +400,7 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
             keycode = event & 0x7F
             is_press = bool(event & 0x80)
 
-            if 1 <= keycode <= 80: # Keypad Array
+            if 1 <= keycode <= 80: # Keypad Array, TODO: change id to 0-79
                 event_flag = True
                 physical_key = self.physical_keys[keycode]
                 physical_key.pressed = is_press
@@ -397,12 +428,9 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
             tca.clear_key_int()
         return event_flag
 
-    def is_pressed(self) -> bool:
-        # TODO
-        return False
-
     def sleep(self):
         # TODO
+        return
         import esp32
         led_enabled = self.led_manager.enabled
         self.led_manager.led_power.value(0)
@@ -416,6 +444,105 @@ class TCA8418PhysicalKeyBoard(PhysicalKeyBoard):
         if led_enabled:
             self.led_manager.enable()
         return
+
+
+class PCA9555KeyBoard(PhysicalKeyBoard):
+    def __init__(
+        self,
+        key_config: str = "/config/physical_keyboard.json",
+        wakeup: Optional[Pin] = None,
+        i2c: Optional[I2C] = None,
+        i2c_addr: Optional[int] = None
+    ):
+        super().__init__(key_config=key_config)
+        ktype = self.key_config.get("ktype", None)
+        sda_pin = self.key_config.get("sda_pin", None)
+        scl_pin = self.key_config.get("scl_pin", None)
+        wakeup_pin = self.key_config.get("wakeup_pin", None)
+        
+        max_keys = self.key_config.get("max_keys", None)
+        keymap_path = self.key_config.get("keymap_path", None)
+        max_light_level = self.key_config.get("max_light_level", None)
+        self.scan_mode = self.key_config.get("scan_mode", None)
+
+        self.event_pending = False
+
+        self.pca_addr = i2c_addr or int(self.key_config.get("address", "0x20"), 16)
+        self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
+        if wakeup is None:
+            self.wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+            self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.tca_interrupt_handler)
+        else:
+            self.wakeup = wakeup
+        
+        self.pca = PCA9555(self.i2c, address=self.pca_addr)
+
+        # TODO: reuse below code:
+        self.max_keys = max_keys
+        self.physical_keys = [None for _ in range(max_keys)]  # TODO: use Dict
+        keymap_json = json.load(open(keymap_path))
+        if "keymap" in keymap_json:
+            self.keymap_dict = keymap_json["keymap"]
+        else:
+            self.keymap_dict = keymap_json
+        self.used_key_num = len(self.keymap_dict)
+        assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
+        for key_name, key_id in self.keymap_dict.items():
+            self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name, max_light_level=max_light_level)
+
+        self.led_manager = LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
+
+        # set pin mode
+        for key_name, key_id in self.keymap_dict.items():
+            self.pca.set_pin_mode(key_id, 1)  # 0 for OUTPUT, 1 for INPUT.
+
+    def tca_interrupt_handler(self, pin: Pin):
+        self.event_pending = True
+
+    def scan(self, interval_us: int = 1, activate: bool = False) -> bool:
+        if not (self.event_pending or activate):
+            return False
+        
+        time.sleep_us(interval_us)
+        self.event_pending = False
+        pca = self.pca
+        event_flag = False
+        pca.read_input_port(0)
+        pca.read_input_port(1)
+
+        for physical_key in self.physical_keys:
+            if physical_key is not None:
+                port = physical_key.key_id // 8
+                bit = physical_key.key_id % 8
+                is_press = (pca.gpio_buffer[port] >> bit) & 0x01
+                if physical_key.pressed == is_press:
+                    continue
+                event_flag = True
+                physical_key.pressed = is_press
+
+                if is_press:
+                    if debugging():
+                        print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
+                    if physical_key.bind_virtual is not None:
+                        physical_key.bind_virtual.press()
+                    else:
+                        if debugging():
+                            print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
+                else:
+                    if physical_key.bind_virtual is not None:
+                        physical_key.bind_virtual.release()
+                    else:
+                        if debugging():
+                            print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
+        return event_flag
+
+
+class MIXPhysicalKeyBoard(PhysicalKeyBoard):
+    def __init__(
+        self,
+        key_config: str = "/config/physical_keyboard.json",
+    ):
+        pass
 
 
 class VirtualKeyBoard:
@@ -433,11 +560,13 @@ class VirtualKeyBoard:
         else:
             self.virtual_key_mappings = None
             self.virtual_key_name = "MicroKeyBoard"
-        ktype = self.virtual_key_mappings.get("ktype", "74hc165")
+        ktype = self.virtual_key_mappings.get("ktype", None)
         if ktype == "tca8418":
-            self.phsical_key_board = TCA8418PhysicalKeyBoard(key_config_path=key_config_path)  # TODO: as an arg
+            self.phsical_key_board = TCA8418KeyBoard(key_config=key_config_path)  # TODO: as an arg
+        elif ktype == "pca9555":
+            self.phsical_key_board = PCA9555KeyBoard(key_config=key_config_path)
         elif ktype == "74hc165":
-            self.phsical_key_board = PhysicalKeyBoard(key_config_path=key_config_path, max_keys=max_phiscal_keys)  # TODO: as an arg
+            self.phsical_key_board = ShiftRegisterKeyBoard(key_config=key_config_path, max_keys=max_phiscal_keys)  # TODO: as an arg
         else:
             raise NotImplementedError(f"Not implemented ktype: {ktype}")
         key_num = max(key_num, self.phsical_key_board.used_key_num)

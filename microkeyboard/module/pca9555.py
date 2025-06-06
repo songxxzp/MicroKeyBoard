@@ -31,7 +31,8 @@ class PCA9555:
 
         # set buffers
         self.read_data_buffer = bytearray(1)
-        self.write_data_buffer = bytearray(2)
+        self.write_data_buffer = memoryview(bytearray(2))
+        self.write_data_buffer_1 = memoryview(bytearray(1))
         self.gpio_buffer = bytearray(2)
 
         # attrs
@@ -65,8 +66,8 @@ class PCA9555:
         Reads a byte value from a PCA9555 register.
         """
         try:
-            self.write_data_buffer[0] = register
-            self.i2c.writeto(self.address, self.write_data_buffer[:1])
+            self.write_data_buffer_1[0] = register
+            self.i2c.writeto(self.address, self.write_data_buffer_1)
             self.i2c.readfrom_into(self.address, self.read_data_buffer)
             return self.read_data_buffer[0]
             # self.i2c.writeto(self.address, bytes([register]))
@@ -321,7 +322,7 @@ if __name__ == "__main__":
         pca.set_port_mode(0, 0xFF) # Set Port 0 (pins 0-7) to all inputs
         pca.set_port_mode(1, 0xFF) # Set Port 1 (pins 8-15) to all inputs
         print("All PCA9555 I/O pins configured as inputs.")
-        print("REMINDER: PCA9555 does NOT have internal pull-up resistors. Ensure external pull-ups are used for stable readings.")
+        print("REMINDER: PCA9535 does NOT have internal pull-up resistors. Ensure external pull-ups are used for stable readings.")
     except Exception as e:
         print(f"Failed to set PCA9555 pin modes: {e}")
         import sys

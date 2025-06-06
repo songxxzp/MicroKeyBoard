@@ -4,7 +4,9 @@ import json
 import random
 import gc
 import machine
+import micropython
 
+from machine import Timer
 from typing import List, Dict, Optional, Callable, Tuple, Union
 
 from microkeyboard.audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
@@ -22,16 +24,19 @@ def main():
     )
 
     screen_manager.text_lines(["MicroKeyBoard", "Starting"])
-    # virtual_key_board = VirtualKeyBoard()
-
-    virtual_key_board = MusicKeyBoard(
-        music_mapping_path="/config/music_keymap.json",
-        mode = "F Major"
+    virtual_key_board = VirtualKeyBoard(
+        mapping_path="/config_pca9555/virtual_keymaps.json",
+        key_config_path="/config_pca9555/physical_keyboard.json"
     )
+
+    # virtual_key_board = MusicKeyBoard(
+    #     music_mapping_path="/config/music_keymap.json",
+    #     mode = "F Major"
+    # )
 
     screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
 
-    count = 0
+    count = [0, True]
     max_scan_gap = 0
     start_time = time.ticks_ms()
     current_time = time.ticks_ms()
@@ -64,7 +69,7 @@ def main():
             led_manager.write_pixels()
         else:
             led_manager.set_pixel(note_key_mapping[note], (1, 1, 1), write=True)
-    play_func = partial(play_note, led_manager=virtual_key_board.phsical_key_board.led_manager, note_key_mapping=virtual_key_board.note_key_mapping)
+    # play_func = partial(play_note, led_manager=virtual_key_board.phsical_key_board.led_manager, note_key_mapping=virtual_key_board.note_key_mapping)
     midi_player.time_multiplayer = 1
     virtual_key_board.bind_fn_layer_func("ENTER", pressed_function=midi_player.start)
     def stop_midi(midi_player: MIDIPlayer, led_manager: LEDManager):
@@ -88,19 +93,36 @@ def main():
     last_print_start = time.ticks_ms()
     last_print_delay = 0
 
+    scan_timer = Timer(0)
+
+    def scan(t: Timer = scan_timer, virtual_key_board=virtual_key_board, count=count):
+        try:
+            count[0] += 1
+            count[1] = True
+            virtual_key_board.scan(1, activate=True)
+        except Exception as exception:
+            t.deinit()
+            raise exception
+
+    def scan_callback(t: Timer):
+        try:
+            if count[1]:
+                count[1] = False
+                micropython.schedule(scan, t)
+        except Exception as exception:
+            t.deinit()
+            raise exception
+
+    # scan_timer.init(mode=Timer.PERIODIC, freq=128, callback=scan_callback)
+    debug_switch(True)
+
     while True:
         scan_start_us = time.ticks_us()
-        midi_player.play(play_func)
+        # midi_player.play(play_func)
         screen_manager.step_animate(texts=texts)
-        if count % 4 == 0:
-            virtual_key_board.scan(1, activate=True)
-        else:
-            virtual_key_board.scan(1)
-        # virtual_key_board.phsical_key_board.scan(0)
-        # virtual_key_board.phsical_key_board.scan_keys(0)
-        # max_scan_gap = max(max_scan_gap, time.ticks_ms() - scan_start_time)
-        # time.sleep_ms(1)
-        count += 1
+        scan()
+        # micropython.schedule(scan, None)
+
         max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
         current_time = time.ticks_ms()
         scan_end_us = time.ticks_us()
@@ -108,8 +130,8 @@ def main():
 
         if debugging() and current_time - start_time >= 1000:
             last_print_start = time.ticks_ms()
-            print(f"{count}/s, gap: {max_scan_gap}ms, mem: {gc.mem_free()}, prt: {last_print_delay}ms")
-            count = 0
+            print(f"{count[0]}/s, gap: {max_scan_gap}ms, mem: {gc.mem_free()}, prt: {last_print_delay}ms")
+            count[0] = 0
             max_scan_gap = 0
             current_time = time.ticks_ms()
             last_print_delay = current_time - last_print_start
