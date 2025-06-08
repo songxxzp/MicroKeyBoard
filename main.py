@@ -25,8 +25,8 @@ def main():
 
     screen_manager.text_lines(["MicroKeyBoard", "Starting"])
     virtual_key_board = VirtualKeyBoard(
-        mapping_path="/config_pca9555/virtual_keymaps.json",
-        key_config_path="/config_pca9555/physical_keyboard.json"
+        mapping_path="/config/virtual_keymaps.json",
+        key_config_path="/config/physical_keyboard.json"
     )
 
     # virtual_key_board = MusicKeyBoard(
@@ -99,7 +99,7 @@ def main():
         try:
             count[0] += 1
             count[1] = True
-            virtual_key_board.scan(1, activate=True)
+            virtual_key_board.scan(activate=True)
         except Exception as exception:
             t.deinit()
             raise exception
@@ -115,6 +115,7 @@ def main():
 
     # scan_timer.init(mode=Timer.PERIODIC, freq=128, callback=scan_callback)
     debug_switch(True)
+    virtual_key_board.scan(activate=True)
 
     while True:
         scan_start_us = time.ticks_us()
@@ -126,7 +127,7 @@ def main():
         max_scan_gap = max(max_scan_gap, time.ticks_ms() - current_time)
         current_time = time.ticks_ms()
         scan_end_us = time.ticks_us()
-        time.sleep_us(min(max(990 - scan_end_us + scan_start_us, 0), 990))  # TODO: dynamic speed
+        time.sleep_us(min(max(990 * 8 - scan_end_us + scan_start_us, 0), 990 * 8))  # TODO: dynamic speed
 
         if debugging() and current_time - start_time >= 1000:
             last_print_start = time.ticks_ms()

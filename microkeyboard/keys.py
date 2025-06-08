@@ -3,6 +3,7 @@ import time
 
 from typing import Optional, Callable
 from microkeyboard.utils import debugging
+from microkeyboard.led import LEDManager
 
 
 class VirtualKey:
@@ -70,22 +71,27 @@ class VirtualKey:
 
 
 class PhysicalKey:
-    def __init__(self, key_id: int, key_name: str, max_light_level: int = 16) -> None:
+    def __init__(self, key_id: int, key_name: str) -> None:
         self.key_id = key_id
         self.key_name = key_name
         self.pressed = False
         # self.bind_light = None    # TODO: bind led on board
-        self.color = (max_light_level, max_light_level, max_light_level)
-        self.random_color(max_light_level)
+        # self.color = (max_light_level, max_light_level, max_light_level)
+        # self.random_color(max_light_level)
         self.bind_virtual: "VirtualKey" = None
+        self.led_manager: "LEDManager" = None
         # TODO: add used mark to avoid conflict
     
-    def random_color(self, max_light_level):
-        self.color = (
-            random.randint(0, max_light_level),
-            random.randint(0, max_light_level),
-            random.randint(0, max_light_level)
-        )
+    def bind_led_manager(self, led_manager: "LEDManager", led_id: int):
+        self.led_manager = led_manager
+        self.led_id = led_id
+
+    # def random_color(self, max_light_level):
+    #     self.color = (
+    #         random.randint(0, max_light_level),
+    #         random.randint(0, max_light_level),
+    #         random.randint(0, max_light_level)
+    #     )
     
     def bind_virtual_key(self, virtual_key: "VirtualKey"):
         self.bind_virtual = virtual_key
