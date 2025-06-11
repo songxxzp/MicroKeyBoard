@@ -1,6 +1,6 @@
 {
     "name": "MicroKeyBoard3",
-    "ktype": "tca8418",
+    "ktype": "mixture",
     "layers": {
         "0": {
             "INSERT": "ESCAPE",
