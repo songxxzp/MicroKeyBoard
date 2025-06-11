@@ -51,9 +51,7 @@ class VirtualKeyBoard:
     def __init__(self,
         connection_mode: str = "bluetooth",
         mapping_path: str = "/config/virtual_keymaps.json",
-        key_config_path: str = "/config/physical_keyboard.json",
-        key_num: int = 68,  # Real used key num.
-        max_phiscal_keys: int = 72,
+        key_config_path: str = "/config/physical_keyboard.json"
     ):
         # assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
         if exists(mapping_path):
@@ -62,19 +60,20 @@ class VirtualKeyBoard:
         else:
             self.virtual_key_mappings = None
             self.virtual_key_name = "MicroKeyBoard"
-        ktype = self.virtual_key_mappings.get("ktype", None)  # TODO: get from phsical keyboard
+        phsical_key_config = json.load(open(key_config_path))
+        ktype = phsical_key_config.get("ktype", None)  # TODO: get from phsical keyboard
         if ktype == "tca8418":
-            self.phsical_key_board = TCA8418KeyBoard(key_config=key_config_path, virtual_keyboard=self)  # TODO: as an arg
+            self.phsical_key_board = TCA8418KeyBoard(key_config=phsical_key_config, virtual_keyboard=self)  # TODO: as an arg
         elif ktype == "pca9555":
-            self.phsical_key_board = PCA9555KeyBoard(key_config=key_config_path, virtual_keyboard=self)
+            self.phsical_key_board = PCA9555KeyBoard(key_config=phsical_key_config, virtual_keyboard=self)
         elif ktype == "mixture":  # TODO: rename
-            self.phsical_key_board = PhysicalKeyBoards(key_config=key_config_path, virtual_keyboard=self)
+            self.phsical_key_board = PhysicalKeyBoards(key_config=phsical_key_config, virtual_keyboard=self)
         elif ktype == "74hc165":
-            self.phsical_key_board = ShiftRegisterKeyBoard(key_config=key_config_path, virtual_keyboard=self, max_keys=max_phiscal_keys)  # TODO: as an arg
+            self.phsical_key_board = ShiftRegisterKeyBoard(key_config=phsical_key_config, virtual_keyboard=self)  # TODO: as an arg
         else:
             raise NotImplementedError(f"Not implemented ktype: {ktype}")
-        key_num = max(key_num, self.phsical_key_board.used_key_num)
-        self.key_num = key_num
+
+        self.key_num = self.phsical_key_board.used_key_num
 
         # editable keyboard state
         self.connection_mode = None
