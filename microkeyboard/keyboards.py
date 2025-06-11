@@ -12,7 +12,7 @@ from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 from microkeyboard.utils import debugging, debug_switch, partial, exists, makedirs
 from microkeyboard.bluetoothkeyboard import BluetoothKeyboard
 from microkeyboard.audio import Sampler, AudioManager
-from microkeyboard.keys import PhysicalKey, VirtualKey
+from microkeyboard.keys import AbstractKey, PhysicalKey, VirtualKey, PhysicalKnob
 from microkeyboard.module.tca8418 import TCA8418
 from microkeyboard.module.pca9555 import PCA9555
 from microkeyboard.led import LEDManager
@@ -57,6 +57,7 @@ class PhysicalKeyBoard:
         self,
         key_config: str = "/config/physical_keyboard.json",
         virtual_keyboard: Optional["VirtualKeyBoard"] = None,
+        led_manager: Optional[LEDManager] = None,
     ):
         if isinstance(key_config, str):
             self.key_config = json.load(open(key_config))
@@ -68,6 +69,41 @@ class PhysicalKeyBoard:
         self.virtual_keyboard = virtual_keyboard
         self.event_pending = False
         self.physical_keys: Optional[Union[List[PhysicalKey], Dict[int, PhysicalKey]]] = None
+
+        max_keys = self.key_config.get("max_keys", None)
+        keymap_path = self.key_config.get("keymap_path", None)
+
+        if keymap_path is None or max_keys is None:  # TODO: PhysicalKeyBoards should have it's own __init__
+            return
+
+        # TODO: reuse below code:
+        self.max_keys = max_keys
+        self.physical_keys = [None for _ in range(max_keys)]
+        keymap_json = json.load(open(keymap_path))
+
+        self.keymap_dict = {}
+        if "keymap" in keymap_json:
+            self.keymap_dict = keymap_json["keymap"]
+
+        self.used_key_num = len(self.keymap_dict)
+        assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
+        for key_name, key_id in self.keymap_dict.items():
+            self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name)
+
+        self.led_manager = led_manager or LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
+
+        self.knobmap_dict = {}
+        self.physical_knobs: List[PhysicalKnob] = []
+        if "knobmap" in keymap_json:
+            self.knobmap_dict = keymap_json["knobmap"]
+
+        for knob_name, key_ids in self.knobmap_dict.items():
+            ((key_a_name, key_a_id), (key_b_name, key_b_id)) = key_ids.items()
+            key_a = AbstractKey(key_id=key_a_id, key_name=key_a_name, is_component=True)
+            key_b = AbstractKey(key_id=key_b_id, key_name=key_b_name, is_component=True)
+            self.physical_keys[key_a_id] = key_a
+            self.physical_keys[key_b_id] = key_b
+            self.physical_knobs.append(PhysicalKnob(key_a, key_b))
 
     def interrupt_handler(self, pin: Pin):
         self.schedule_scan(pin)
@@ -85,6 +121,23 @@ class PhysicalKeyBoard:
 
     def scan(self, activate: bool = True) -> bool:
         return False
+
+    def knob_scan(self) -> bool:
+        event_flag = False
+        for physical_knob in self.physical_knobs:
+            if physical_knob.check_rotation():
+                event_flag = True
+                physical_key = physical_knob.rotated_key()
+                if physical_key is None:
+                    continue
+                pressed = not (physical_knob.rotation == 0)
+                if pressed:
+                    if physical_key.bind_virtual is not None:
+                        physical_key.bind_virtual.press()
+                else:
+                    if physical_key.bind_virtual is not None:
+                        physical_key.bind_virtual.release()
+        return event_flag
 
     def key_iter(self) -> Iterator[PhysicalKey]:
         if self.physical_keys is not None:
@@ -110,12 +163,10 @@ class ShiftRegisterKeyBoard(PhysicalKeyBoard):
         read_pin: Optional[int] = None,
         power_pin: Optional[int] = None,
         wakeup_pin: Optional[int] = None,
-        max_keys: Optional[int] = None,  # The maximum number of keys for key scanning. The actual number of keys used is less than or equal to this number.
-        keymap_path: Optional[str] = None,  # "/config/physical_keymap.json",
         scan_mode: Optional[int] = None,
         led_manager: Optional[LEDManager] = None,
     ):
-        super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard)
+        super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard, led_manager=led_manager)
 
         ktype = ktype or self.key_config.get("ktype", None)
         clock_pin = pl_pin or self.key_config.get("clock_pin", None)
@@ -124,10 +175,8 @@ class ShiftRegisterKeyBoard(PhysicalKeyBoard):
         read_pin = read_pin or self.key_config.get("read_pin", None)
         power_pin = power_pin or self.key_config.get("power_pin", None)
         wakeup_pin = wakeup_pin or self.key_config.get("wakeup_pin", None)
-        max_keys = max_keys or self.key_config.get("max_keys", None)
-        keymap_path = keymap_path or self.key_config.get("keymap_path", None)
         self.scan_mode = scan_mode or self.key_config.get("scan_mode", None)
-    
+
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
         self.key_ce = Pin(ce_pin, Pin.OUT, value=0)
         self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
@@ -161,20 +210,6 @@ class ShiftRegisterKeyBoard(PhysicalKeyBoard):
             self.spi = None
         else:
             raise NotImplementedError(f"scan mode not implemented: {self.scan_mode}")
-
-        self.max_keys = max_keys
-        self.physical_keys = [None for _ in range(max_keys)]
-        keymap_json = json.load(open(keymap_path))
-        if "keymap" in keymap_json:
-            self.keymap_dict = keymap_json["keymap"]
-        else:
-            self.keymap_dict = keymap_json
-        self.used_key_num = len(self.keymap_dict)
-        assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
-        for key_name, key_id in self.keymap_dict.items():
-            self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name)
-        
-        self.led_manager = led_manager or LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
 
         # Calculate the number of bytes needed to store max_keys bits
         self.bytes_needed = (self.max_keys + 7) // 8
@@ -331,15 +366,13 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
         i2c_addr: Optional[int] = None,
         led_manager: Optional[LEDManager] = None,
     ):
-        super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard)
+        super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard, led_manager=led_manager)
 
         ktype = self.key_config.get("ktype", None)
         sda_pin = self.key_config.get("sda_pin", None)
         scl_pin = self.key_config.get("scl_pin", None)
         wakeup_pin = self.key_config.get("wakeup_pin", None)
-        
-        max_keys = self.key_config.get("max_keys", None)
-        keymap_path = self.key_config.get("keymap_path", None)
+
         self.scan_mode = self.key_config.get("scan_mode", None)
 
         self.event_pending = False
@@ -395,21 +428,6 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
         tca.clear_overflow_int()
         tca.clear_keylock_int()
         tca.clear_cad_int()
-
-        # TODO: reuse below code:
-        self.max_keys = max_keys
-        self.physical_keys = [None for _ in range(max_keys)]
-        keymap_json = json.load(open(keymap_path))
-        if "keymap" in keymap_json:
-            self.keymap_dict = keymap_json["keymap"]
-        else:
-            self.keymap_dict = keymap_json
-        self.used_key_num = len(self.keymap_dict)
-        assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
-        for key_name, key_id in self.keymap_dict.items():
-            self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name)
-        
-        self.led_manager = led_manager or LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
 
     def scan(self, activate: bool = False) -> bool:  # TODO: activate scan
         if (not (self.event_pending or activate)) or self.i2c_reading:
@@ -482,14 +500,12 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
         i2c_addr: Optional[int] = None,
         led_manager: Optional[LEDManager] = None,
     ):
-        super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard)
+        super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard, led_manager=led_manager)
         ktype = self.key_config.get("ktype", None)
         sda_pin = self.key_config.get("sda_pin", None)
         scl_pin = self.key_config.get("scl_pin", None)
         wakeup_pin = self.key_config.get("wakeup_pin", None)
-        
-        max_keys = self.key_config.get("max_keys", None)
-        keymap_path = self.key_config.get("keymap_path", None)
+
         self.scan_mode = self.key_config.get("scan_mode", None)
 
         self.event_pending = False
@@ -503,21 +519,6 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
             self.wakeup = wakeup
         
         self.pca = PCA9555(self.i2c, address=self.pca_addr)
-
-        # TODO: reuse below code:
-        self.max_keys = max_keys
-        self.physical_keys = [None for _ in range(max_keys)]
-        keymap_json = json.load(open(keymap_path))
-        if "keymap" in keymap_json:
-            self.keymap_dict = keymap_json["keymap"]
-        else:
-            self.keymap_dict = keymap_json
-        self.used_key_num = len(self.keymap_dict)
-        assert self.used_key_num <= self.max_keys, "More keys are used than the maximum allowed!"
-        for key_name, key_id in self.keymap_dict.items():
-            self.physical_keys[key_id] = PhysicalKey(key_id=key_id, key_name=key_name)
-        
-        self.led_manager = led_manager or LEDManager(self.key_config, ledmap=keymap_json.get("ledmap", {}))
 
         # set pin mode
         for key_name, key_id in self.keymap_dict.items():
@@ -543,6 +544,9 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
                 event_flag = True
                 physical_key.pressed = is_press
 
+                if physical_key.is_component:  # TODO: component key do not bind virtual
+                    continue
+
                 if is_press:
                     if debugging():
                         print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
@@ -557,6 +561,7 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
                     else:
                         if debugging():
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
+        event_flag = event_flag or self.knob_scan()
         return event_flag
 
 
