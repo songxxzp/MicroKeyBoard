@@ -11,7 +11,8 @@ from typing import List, Dict, Optional, Callable, Tuple, Union
 
 from microkeyboard.audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
 from microkeyboard.utils import partial, exists, makedirs, check_disk_space, debug_switch, debugging
-from microkeyboard.keyboards import PhysicalKeyBoard, VirtualKeyBoard, MusicKeyBoard, LEDManager
+from microkeyboard.keyboards.virtualkeyboards import VirtualKeyBoard, MusicKeyBoard
+from microkeyboard.keyboards.led import LEDManager
 from microkeyboard.screen import ScreenManager
 
 

@@ -3,7 +3,7 @@ import time
 
 from typing import Optional, Callable
 from microkeyboard.utils import debugging
-from microkeyboard.led import LEDManager
+from microkeyboard.keyboards.led import LEDManager
 
 
 class VirtualKey:
