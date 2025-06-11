@@ -9,6 +9,7 @@ from machine import Pin, I2S, SPI, SoftSPI, I2C
 from typing import Optional, Callable, List, Dict, Tuple, Union, Iterator
 from usb.device.keyboard import KeyboardInterface, KeyCode, LEDCode
 
+from microkeyboard.pins import IRQPin
 from microkeyboard.utils import debugging, debug_switch, partial, exists, makedirs
 from microkeyboard.bluetoothkeyboard import BluetoothKeyboard
 from microkeyboard.audio import Sampler, AudioManager
@@ -106,7 +107,7 @@ class PhysicalKeyBoard:
             self.physical_knobs.append(PhysicalKnob(key_a, key_b))
 
     def interrupt_handler(self, pin: Pin):
-        self.schedule_scan(pin)
+        self.schedule_scan(False)
     
     def schedule_scan(self, activate: bool = True):
         if not self.event_pending:
@@ -180,7 +181,7 @@ class ShiftRegisterKeyBoard(PhysicalKeyBoard):
         self.key_pl = Pin(pl_pin, Pin.OUT, value=1)
         self.key_ce = Pin(ce_pin, Pin.OUT, value=0)
         self.key_power = Pin(power_pin, Pin.OUT, value=1) if power_pin is not None else None
-        self.wakeup = Pin(wakeup_pin, mode=Pin.IN, pull=Pin.PULL_DOWN) if wakeup_pin is not None else None
+        self.wakeup = IRQPin(wakeup_pin, mode=Pin.IN, pull=Pin.PULL_DOWN) if wakeup_pin is not None else None
         if self.scan_mode == "SPI":
             self.key_clk = Pin(clock_pin)
             self.key_in = Pin(read_pin)
@@ -381,7 +382,7 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
         self.tca_addr = i2c_addr or int(self.key_config.get("address", "0x34"), 16)
         self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
         if wakeup is None:
-            self.wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+            self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
             self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
         else:
             self.wakeup = wakeup
@@ -512,16 +513,18 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
 
         self.pca_addr = i2c_addr or int(self.key_config.get("address", "0x20"), 16)
         self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
+        self.pca = PCA9555(self.i2c, address=self.pca_addr)
+
         if wakeup is None:
-            self.wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+            self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
             self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
         else:
             self.wakeup = wakeup
-        
-        self.pca = PCA9555(self.i2c, address=self.pca_addr)
+
+        self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.pca.interrupt_handler)
 
         # set pin mode
-        for key_name, key_id in self.keymap_dict.items():
+        for _, key_id in self.keymap_dict.items():
             self.pca.set_pin_mode(key_id, 1)  # 0 for OUTPUT, 1 for INPUT.
 
     def scan(self, activate: bool = False) -> bool:
@@ -531,14 +534,12 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
         self.event_pending = False
         pca = self.pca
         event_flag = False
-        pca.read_input_port(0)
-        pca.read_input_port(1)
+        if activate:
+            pca.scan()
 
         for physical_key in self.physical_keys:
             if physical_key is not None:
-                port = physical_key.key_id // 8
-                bit = physical_key.key_id % 8
-                is_press = not((pca.gpio_buffer[port] >> bit) & 0x01)
+                is_press = not pca.digital_read_from_buffer(physical_key.key_id)
                 if physical_key.pressed == is_press:
                     continue
                 event_flag = True
@@ -561,7 +562,7 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
                     else:
                         if debugging():
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
-        event_flag = event_flag or self.knob_scan()
+        event_flag = self.knob_scan() or event_flag
         return event_flag
 
 
@@ -574,6 +575,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
         self,
         key_config: str = "/config/physical_keyboard.json",
         virtual_keyboard: Optional["VirtualKeyBoard"] = None,
+        wakeup: Optional["Pin"] = None,
     ):
         super().__init__(key_config=key_config, virtual_keyboard=virtual_keyboard)
         self.ktype = self.key_config.get("ktype", None)
@@ -599,14 +601,15 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
             else:
                 raise NotImplementedError(f"Not implemented scan_mode: {scan_mode}")
 
-            if "wakeup_pin" in device_config:
+            if wakeup is None and "wakeup_pin" in device_config:
                 wakeup_pin = device_config["wakeup_pin"]
                 bus_key = ("int", wakeup_pin)
                 if bus_key not in self.bus:
                     print(f"New bus: {bus_key}")
-                    wakeup = Pin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP)
+                    wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP)
                     self.bus[bus_key] = wakeup
                     wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+            # TODO: handle wakeup
 
         for device_config in self.devices:
             device_ktype = device_config["ktype"]
@@ -650,8 +653,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
     def interrupt_handler(self, pin: Pin):
         for phsical_key_board in self.phsical_key_boards:
             phsical_key_board.event_pending = True
-            # phsical_key_board.schedule_scan(pin)
-        self.schedule_scan(pin)
+        self.schedule_scan(False)
 
     def scan(self, activate: bool = True) -> bool:
         self.event_pending = False

@@ -1,6 +1,8 @@
 import time
 import machine
+import micropython
 
+from typing import List, Tuple, Callable
 from machine import Pin, I2C
 
 
@@ -34,9 +36,12 @@ class PCA9555:
         self.write_data_buffer = memoryview(bytearray(2))
         self.write_data_buffer_1 = memoryview(bytearray(1))
         self.gpio_buffer = bytearray(2)
+        self._gpio_history = bytearray(2)
+        self._irq_check_flag = False
 
         # attrs
         # self._last_read_tick
+        self._handlers: List[Tuple[Callable, int]] = []
 
         # Scan for I2C devices to confirm PCA9555 presence
         devices = self.i2c.scan()
@@ -143,7 +148,6 @@ class PCA9555:
         
         # print(f"Port {port_num} configuration set to 0x{config_byte:02x}")
 
-
     def digital_write(self, pin: int, value: bool):
         """
         Sets the digital level (HIGH/LOW) for a single output pin.
@@ -198,6 +202,8 @@ class PCA9555:
         else: # port == 1
             input_value = self._read_register(self.INPUT_PORT_1)
         
+        self._irq_check_flag = not (self._gpio_history[port] == self.gpio_buffer[port])
+        self._gpio_history[port] = self.gpio_buffer[port]
         if input_value == 1:
             self.gpio_buffer[port] = self._set_bit(self.gpio_buffer[port], bit)
         else:
@@ -205,44 +211,46 @@ class PCA9555:
 
         return (input_value >> bit) & 0x01
 
-    def write_output_port(self, port_num: int, value: int):
+    def write_output_port(self, port: int, value: int):
         """
         Sets the digital levels for an entire output port.
 
         Args:
-            port_num: The port number (0 or 1).
+            port: The port number (0 or 1).
             value: A byte where each bit corresponds to a pin's output level.
                    0 means LOW, 1 means HIGH.
         """
-        if port_num not in (0, 1):
+        if port not in (0, 1):
             raise ValueError("Port number must be 0 or 1.")
         
-        if port_num == 0:
+        if port == 0:
             self._write_register(self.OUTPUT_PORT_0, value)
         else:
             self._write_register(self.OUTPUT_PORT_1, value)
         
-        # print(f"Port {port_num} output set to 0x{value:02x}")
+        # print(f"Port {port} output set to 0x{value:02x}")
 
-    def read_input_port(self, port_num: int) -> int:
+    def read_input_port(self, port: int) -> int:
         """
         Reads the digital levels for an entire input port.
 
         Args:
-            port_num: The port number (0 or 1).
+            port: The port number (0 or 1).
 
         Returns:
             A byte where each bit corresponds to a pin's input level.
         """
-        if port_num not in (0, 1):
+        if port not in (0, 1):
             raise ValueError("Port number must be 0 or 1.")
         
-        if port_num == 0:
+        if port == 0:
             input_value = self._read_register(self.INPUT_PORT_0)
         else:
             input_value = self._read_register(self.INPUT_PORT_1)
 
-        self.gpio_buffer[port_num] = input_value
+        self._irq_check_flag = not (self._gpio_history[port] == self.gpio_buffer[port])
+        self._gpio_history[port] = self.gpio_buffer[port]
+        self.gpio_buffer[port] = input_value
 
         return input_value
 
@@ -283,10 +291,41 @@ class PCA9555:
             return self._read_register(self.POLARITY_INVERSION_PORT_0)
         else:
             return self._read_register(self.POLARITY_INVERSION_PORT_1)
-    
-    def scan(self, pin: Pin):
+
+    def digital_read_from_buffer(self, pin: int) -> bool:
+        port = pin // 8
+        bit = pin % 8
+        return (self.gpio_buffer[port] >> bit) & 0x01
+
+    def read_from_buffer(self, pin: int, buffer: bytearray) -> bool:
+        port = pin // 8
+        bit = pin % 8
+        return (buffer[port] >> bit) & 0x01
+
+    def scan(self):
+        """
+        Scan both ports
+        TODO: Call irq if any ScanI2CPin is registerd
+        """
         self.read_input_port(0)
         self.read_input_port(1)
+        if self._irq_check_flag:
+            for handler, trigger, i2cpin in self._handlers:
+                curr = self.read_from_buffer(i2cpin.pin_number, self.gpio_buffer)
+                hist = self.read_from_buffer(i2cpin.pin_number, self._gpio_history)
+                if trigger == Pin.IRQ_FALLING and hist and (not curr):
+                    handler(i2cpin)
+                elif trigger == Pin.IRQ_RISING and (not hist) and curr:
+                    handler(i2cpin)
+            self._irq_check_flag = False
+
+    def interrupt_handler(self, pin: Pin):
+        self.scan()
+
+    def register_irq(self, i2cpin: "I2CPin", handler=None, trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING):
+        # This function only set irq. However, handler won't be called without extra codes.
+        # TODO:
+        self._handlers.append((handler, trigger, i2cpin))
 
 
 if __name__ == "__main__":

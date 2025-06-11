@@ -2,7 +2,34 @@ import time
 
 from machine import Pin
 
-from microkeyboard.module.pca9555 import PCA9555 # 确保pca9555.py文件在MicroPython设备上
+from microkeyboard.module.pca9555 import PCA9555
+
+
+class IRQPin(Pin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._handlers = []
+        self.trigger = None
+        # self.priority = None
+        # self.wake = None
+        # self.hard = None
+
+    def irq_handler(self, pin: Pin):
+        for handler in self._handlers:
+            handler(pin)
+
+    def clear_irq(self):
+        self._handlers = []
+
+    # TODO: delete specific irq
+
+    def irq(self, handler=None, trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING):
+        self._handlers.append(handler)
+        if self.trigger is None:
+            self.trigger = trigger
+        else:
+            assert self.trigger == trigger
+        super().irq(handler=self.irq_handler, trigger=trigger)
 
 
 class I2CPin:
@@ -70,7 +97,7 @@ class I2CPin:
             self._mode = 0 # Store internal mode for consistency
         else:
             raise ValueError("Invalid pin mode specified. Use I2CPin.IN or I2CPin.OUT.")
-        
+
         # print(f"I2CPin {self._pin_num} set to mode: {mode}")
 
     def value(self, x=None):
@@ -121,20 +148,25 @@ class I2CPin:
         # This function only set irq. However, handler won't be called without extra codes.
         self._handler = handler
         self._trigger = trigger
+        self._pca.register_irq(self, handler=self._handler, trigger=self._trigger)
+
+    def interrupt_handler(self, pin: Pin):
+        if self._handler is not None:
+            self._handler(self, pin)
 
 
-class ScanI2CPin(I2CPin):
+class PassiveI2CPin(I2CPin):
     """
     A class that mimics the functionality and interface of machine.Pin,
     but controls a specific pin on a PCA9555 I2C GPIO expander.
-    Pin value is updated by PCA9555.
+    Pin value is updated by PCA9555, PassiveI2CPin.value() won't trigger i2c scan.
     IRQ is also called by PCA9555.
     """
 
     def __init__(self, pca_instance: PCA9555, pin_number: int, mode=-1, pull=-1):
         super().__init__(pca_instance=pca_instance, pin_number=pin_number, mode=mode, pull=pull)
         self._value = self._pca.digital_read(self._pin_num)
-        # self._last_read_tick
+        # self._last_read_tick  # TODO: read i2c if not read for too long
 
     def value(self, x = None):
         """
@@ -148,11 +180,7 @@ class ScanI2CPin(I2CPin):
             The pin's value if x is None (0 or 1).
         """
         if x is None:
-            self._value = (self._pca.gpio_buffer[self._pin_num // 8] >> (self._pin_num % 8)) & 0x01
+            self._value = self._pca.digital_read_from_buffer(self._pin_num)
             return self._value
         else:
             return super().value(x=x)
-
-    def call_irq(self):
-        if self._handler is not None:
-            self._handler(self)
