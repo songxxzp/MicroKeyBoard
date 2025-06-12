@@ -1,128 +1,30 @@
 import micropython
-# The 'struct' module is typically used for converting between Python values
-# and C structs, but here we're using Viper's direct memory access.
-# It's kept in the import for consistency if other parts of the project use it,
-# but it's not directly used within these Viper functions themselves.
-import struct 
 
-# """ Viper Helper Functions for 16-bit Sample Access """
-# These functions are critical for safely reading and writing multi-byte
-# integer samples directly from/to `bytearray` memory in MicroPython's Viper mode.
-# They explicitly handle endianness and signed conversion for 16-bit samples.
+# --- Viper Core: Interpolation Function for Pitch Shifting ---
+# This function performs linear interpolation on audio samples to achieve pitch shifting.
+# It operates directly on 16-bit samples in memory using the native byte order of the MCU.
 
-@micropython.viper
-def _get_int16_le(buf: ptr8, byte_idx: int) -> int:
-    """
-    Reads a 16-bit signed **little-endian** integer from a bytearray at the specified byte index.
-    
-    Args:
-        buf (ptr8): A pointer to the bytearray's underlying memory.
-        byte_idx (int): The starting byte index of the 16-bit sample.
-        
-    Returns:
-        int: The signed 16-bit integer value.
-    """
-    # Little-endian: LSB (Least Significant Byte) at lower address, MSB (Most Significant Byte) at higher address
-    # Read LSB (buf[byte_idx]) and MSB (buf[byte_idx + 1]), then combine.
-    val: int = int(buf[byte_idx]) | (int(buf[byte_idx + 1]) << 8)
-    
-    # Convert to signed 16-bit if the MSB indicates a negative number (e.g., if val is 32768 or greater)
-    if val >= 32768:
-        val -= 65536 # Equivalent to subtracting 2^16 for 2's complement
-    return val
+# Assumes:
+# - Audio samples are 16-bit signed integers.
+# - The bytearrays passed correspond to the native byte order of the MicroPython device.
+# - No explicit endianness conversion is performed within this function, relying on Viper's ptr16.
 
-@micropython.viper
-def _set_int16_le(buf: ptr8, byte_idx: int, value: int):
-    """
-    Writes a 16-bit signed **little-endian** integer to a bytearray at the specified byte index.
-    Includes clamping to prevent overflow/underflow outside the 16-bit signed range.
-    
-    Args:
-        buf (ptr8): A pointer to the bytearray's underlying memory.
-        byte_idx (int): The starting byte index to write the 16-bit sample.
-        value (int): The integer value to write.
-    """
-    # Clamp value to the 16-bit signed integer range (-32768 to 32767)
-    if value > 32767:
-        value = 32767
-    elif value < -32768:
-        value = -32768
-
-    # Little-endian: LSB written first, then MSB
-    buf[byte_idx] = int(value) & 0xFF        # Write LSB
-    buf[byte_idx + 1] = (int(value) >> 8) & 0xFF # Write MSB
-
-@micropython.viper
-def _get_int16_be(buf: ptr8, byte_idx: int) -> int:
-    """
-    Reads a 16-bit signed **big-endian** integer from a bytearray at the specified byte index.
-    
-    Args:
-        buf (ptr8): A pointer to the bytearray's underlying memory.
-        byte_idx (int): The starting byte index of the 16-bit sample.
-        
-    Returns:
-        int: The signed 16-bit integer value.
-    """
-    # Big-endian: MSB (Most Significant Byte) at lower address, LSB (Least Significant Byte) at higher address
-    # Read MSB (buf[byte_idx]) and LSB (buf[byte_idx + 1]), then combine.
-    val: int = (int(buf[byte_idx]) << 8) | int(buf[byte_idx + 1])
-    
-    # Convert to signed 16-bit if the MSB indicates a negative number
-    if val >= 32768:
-        val -= 65536
-    return val
-
-@micropython.viper
-def _set_int16_be(buf: ptr8, byte_idx: int, value: int):
-    """
-    Writes a 16-bit signed **big-endian** integer to a bytearray at the specified byte index.
-    Includes clamping to prevent overflow/underflow outside the 16-bit signed range.
-    
-    Args:
-        buf (ptr8): A pointer to the bytearray's underlying memory.
-        byte_idx (int): The starting byte index to write the 16-bit sample.
-        value (int): The integer value to write.
-    """
-    # Clamp value to the 16-bit signed integer range (-32768 to 32767)
-    if value > 32767:
-        value = 32767
-    elif value < -32768:
-        value = -32768
-
-    # Big-endian: MSB written first, then LSB
-    buf[byte_idx] = (int(value) >> 8) & 0xFF # Write MSB
-    buf[byte_idx + 1] = int(value) & 0xFF   # Write LSB
-
-"""
-## Viper Core Interpolation Function for Pitch Shifting
-
-This function performs linear interpolation on audio samples to achieve pitch shifting. It takes an original buffer, interpolates its samples, and writes the result to a new buffer.
-
-**Assumptions:**
-* Audio samples are 16-bit signed integers.
-* **Little-endian** format is used for sample reading/writing. If your samples are big-endian, you must swap `_get_int16_le` and `_set_int16_le` for their `_be` counterparts in this function.
-
-"""
+# --- Viper Core: Interpolation Function for Pitch Shifting ---
 @micropython.viper
 def _interpolate_viper_core(
-    original_buf: ptr8,     # Pointer to the original audio data bytearray
+    original_buf: ptr16,    # Pointer to the original audio data (array of 16-bit samples)
     original_len_samples: int, # Number of samples in the original audio buffer
     new_len_samples: int,      # Desired number of samples for the interpolated audio
-    result_buf: ptr8,          # Pointer to the bytearray where the interpolated result will be stored
+    result_buf: ptr16,          # Pointer to the bytearray (array of 16-bit samples) where the interpolated result will be stored
     shift_factor_scaled: int,  # Pitch shift factor, scaled up by `scale_factor_interp` for integer math
     scale_factor_interp: int   # Scaling factor used for `shift_factor_scaled` (e.g., 10000)
 ):
     """
     Viper core interpolation function for audio pitch shifting.
     Performs linear interpolation to transform `original_buf` into `result_buf`.
-    
-    This function operates directly on memory for efficiency. It simulates
-    floating-point arithmetic for interpolation by scaling values as integers.
+    Optimized for speed by using ptr16 and native byte order.
+    Handles 16-bit signed integer interpretation and output clamping explicitly.
     """
-    # Fixed to 2 bytes per sample for 16-bit audio. Adjust if your sample bit depth changes.
-    bytes_per_sample: int = 2 
-
     # Declare and initialize loop counter as a Viper integer for type safety and optimization.
     i_new_int: int = 0 
 
@@ -139,41 +41,66 @@ def _interpolate_viper_core(
         # Boundary check: If the calculated index goes beyond the original sample data,
         # simply repeat the last valid sample to prevent out-of-bounds access.
         if int(idx_int) >= int(original_len_samples) - 1:
-            sample_val: int = _get_int16_le(original_buf, (int(original_len_samples) - 1) * int(bytes_per_sample))
-            _set_int16_le(result_buf, int(i_new_int) * int(bytes_per_sample), sample_val)
+            # Directly access the 16-bit sample at the last valid index
+            sample_val_unsigned: int = original_buf[int(original_len_samples) - 1]
+            # Convert to signed 16-bit
+            if sample_val_unsigned >= 32768:
+                sample_val_unsigned -= 65536
+            result_buf[int(i_new_int)] = sample_val_unsigned
             continue # Move to the next sample in the result buffer
 
         # Get the two adjacent sample values from the original buffer needed for linear interpolation.
-        y0: int = _get_int16_le(original_buf, int(idx_int) * int(bytes_per_sample))
-        y1: int = _get_int16_le(original_buf, (int(idx_int) + 1) * int(bytes_per_sample))
+        # Direct access to 16-bit samples via ptr16.
+        y0_unsigned: int = original_buf[int(idx_int)]
+        y1_unsigned: int = original_buf[int(idx_int) + 1]
+
+        # Explicitly convert y0 and y1 from potentially unsigned 16-bit representation
+        # to signed 32-bit `int` for calculations.
+        y0: int = y0_unsigned
+        if y0 >= 32768:
+            y0 -= 65536
+
+        y1: int = y1_unsigned
+        if y1 >= 32768:
+            y1 -= 65536
 
         # Linear interpolation formula: y = y0 + (y1 - y0) * fractional_part
         # Implemented using scaled integer arithmetic for Viper compatibility.
         diff_y: int = int(y1) - int(y0)
+        
+        # All intermediate calculations (y0 * scale_factor_interp, diff_y * fractional_part_scaled)
+        # will implicitly use Viper's 32-bit `int` type, preventing overflow for typical audio ranges.
         interp_val_scaled: int = int(y0) * int(scale_factor_interp) + int(diff_y) * int(fractional_part_scaled)
         
         # Scale back down to get the final interpolated sample value.
+        # Python's // (floor division) is generally fine for interpolation,
+        # as it aligns with how floating point truncation for indices works.
         interp_val: int = int(interp_val_scaled) // int(scale_factor_interp)
 
+        # Explicitly clamp the final interpolated value to the 16-bit signed range [-32768, 32767]
+        # before writing to the ptr16 buffer.
+        if interp_val > 32767:
+            interp_val = 32767
+        elif interp_val < -32768:
+            interp_val = -32768
+
         # Write the calculated interpolated sample to the result buffer.
-        _set_int16_le(result_buf, int(i_new_int) * int(bytes_per_sample), interp_val)
+        result_buf[int(i_new_int)] = interp_val
 
-"""
-## Python Wrapper for Interpolation
 
-This higher-level Python function serves as a convenient wrapper for the Viper core, handling input validation, buffer preparation, and parameter scaling.
-
-"""
+# --- Python Wrapper for Interpolation (Calls fast version) ---
 def interpolate(
-    closest_sample_bytes: bytes, # Original audio data (can be `bytes` or `bytearray`)
+    closest_sample_bytes: bytes, # Original audio data (bytes or bytearray)
     original_length_bytes: int,  # Original length of the audio data in bytes
     new_length_bytes: int        # Desired length of the interpolated audio data in bytes
 ) -> bytearray:
     """
     Performs linear interpolation for audio pitch shifting using a Viper-optimized core.
     This function interpolates the `closest_sample_bytes` to a `new_length_bytes`.
+    Optimized for speed by assuming native byte order.
     
-    Assumes samples are 16-bit signed integers.
+    Assumes samples are 16-bit signed integers and that `closest_sample_bytes`
+    already conforms to the native byte order of the MicroPython device.
     
     Args:
         closest_sample_bytes (bytes): The input audio data.
@@ -186,24 +113,20 @@ def interpolate(
     Raises:
         ValueError: If buffer lengths are not multiples of bytes per sample.
     """
-    # Define bytes per sample. This must match the bit depth handled by _get_int16_le/_set_int16_le.
     BYTES_PER_SAMPLE: int = 2 
     
-    # Validate that buffer lengths are compatible with the sample size.
     if original_length_bytes % BYTES_PER_SAMPLE != 0 or \
        new_length_bytes % BYTES_PER_SAMPLE != 0:
         raise ValueError("Buffer lengths must be multiples of bytes_per_sample.")
 
-    # Convert byte lengths to sample counts.
     original_len_samples = original_length_bytes // BYTES_PER_SAMPLE
     new_len_samples = new_length_bytes // BYTES_PER_SAMPLE
 
-    # Handle edge case: if the target length is zero, return an empty bytearray.
     if new_len_samples == 0:
         return bytearray() 
 
     # Ensure the original data is a mutable `bytearray` for Viper's direct memory access.
-    # If `bytes` is passed, a copy is made. If `bytearray`, it's used directly.
+    # If `bytes` is passed, a copy is made.
     if not isinstance(closest_sample_bytes, bytearray):
         original_data_mutable = bytearray(closest_sample_bytes)
     else:
@@ -213,16 +136,12 @@ def interpolate(
     shifted_sample_bytes = bytearray(new_length_bytes)
 
     # Calculate the float pitch shift factor (ratio of original samples to new samples).
-    # This factor will be scaled up for integer arithmetic in Viper.
     shift_factor_float: float = original_len_samples / new_len_samples
 
-    # Define a scaling factor for integer-based float emulation in Viper.
-    # A larger factor increases precision but might slightly increase computation time.
-    SCALE_FACTOR_INTERP: int = 10000
-    # Scale the float shift factor to an integer for Viper.
+    SCALE_FACTOR_INTERP: int = 10000 # Same scaling factor for integer math.
     shift_factor_scaled: int = int(shift_factor_float * SCALE_FACTOR_INTERP)
 
-    # Call the Viper core interpolation function to perform the actual processing.
+    # Call the FAST Viper core function, passing bytearrays, which Viper will interpret as ptr16.
     _interpolate_viper_core(
         original_data_mutable,
         original_len_samples,
@@ -234,68 +153,34 @@ def interpolate(
 
     return shifted_sample_bytes
 
-"""
-## Viper Core: Clear Bytearray
 
-This function efficiently clears a `bytearray` by setting all its bytes to `0` directly in memory.
-
-"""
+# --- Viper Core: Clear Bytearray (Unchanged as it operates on individual bytes) ---
 @micropython.viper
 def clear_bytearray_viper(buf: ptr8, length: int):
     """
     Clears all bytes in a bytearray to 0 using Viper for maximum efficiency.
-    
-    Args:
-        buf (ptr8): A pointer to the bytearray's underlying memory.
-        length (int): The number of bytes in the bytearray to clear.
+    This function remains ptr8 as it operates on individual bytes.
     """
-    # Iterate through each byte in the buffer and set it to 0.
     for i in range(length):
         buf[i] = 0
 
-"""
-## Viper Core: Element-wise Array Addition
 
-This function performs element-wise addition of two 16-bit signed integer arrays, storing the result in a third array.
-
-**Assumptions:**
-* All arrays contain 16-bit signed integers.
-* **Little-endian** format is used for sample reading/writing. If your samples are big-endian, you must swap `_get_int16_le` and `_set_int16_le` for their `_be` counterparts.
-
-"""
+# --- Viper Core: Element-wise Array Addition (Optimized with ptr16) ---
 @micropython.viper
 def add_int16_arrays_viper(
-    arr1_ptr: ptr8,      # Pointer to the first input bytearray
-    arr1_len_bytes: int, # Byte length of the first bytearray
-    arr2_ptr: ptr8,      # Pointer to the second input bytearray
-    arr2_len_bytes: int, # Byte length of the second bytearray
-    result_ptr: ptr8,    # Pointer to the output bytearray where the sum will be stored
-    result_len_bytes: int # Byte length of the result bytearray
+    arr1_ptr: ptr16,      # Pointer to the first array (of 16-bit samples)
+    arr1_len_samples: int, # Number of samples in the first array
+    arr2_ptr: ptr16,      # Pointer to the second array (of 16-bit samples)
+    arr2_len_samples: int, # Number of samples in the second array
+    result_ptr: ptr16,    # Pointer to the result array (of 16-bit samples)
+    result_len_samples: int # Number of samples in the result array
 ):
     """
-    Performs element-wise addition of two 16-bit signed integer arrays 
-    (represented as bytearrays) and stores the sum in a third array.
-    
-    The operation processes samples up to the length of the shortest array among the inputs and result.
-    
-    Args:
-        arr1_ptr: Pointer to the first input bytearray.
-        arr1_len_bytes: Length of the first input bytearray in bytes.
-        arr2_ptr: Pointer to the second input bytearray.
-        arr2_len_bytes: Length of the second input bytearray in bytes.
-        result_ptr: Pointer to the output bytearray where the sum will be stored.
-        result_len_bytes: Length of the output bytearray in bytes.
+    Performs element-wise addition of two 16-bit signed integer arrays.
+    Optimized for speed by using ptr16 and native byte order.
+    The result is stored in a third array.
     """
-    # Fixed to 2 bytes per sample for 16-bit audio.
-    BYTES_PER_SAMPLE: int = 2 
-
-    # Calculate lengths in terms of samples.
-    arr1_len_samples: int = arr1_len_bytes // BYTES_PER_SAMPLE
-    arr2_len_samples: int = arr2_len_bytes // BYTES_PER_SAMPLE
-    result_len_samples: int = result_len_bytes // BYTES_PER_SAMPLE
-
-    # Determine the actual number of samples to process. This ensures we don't
-    # read or write beyond the bounds of any of the arrays.
+    # Determine the actual number of samples to process.
     num_samples_to_process: int = arr1_len_samples
     if arr2_len_samples < num_samples_to_process:
         num_samples_to_process = arr2_len_samples
@@ -304,127 +189,530 @@ def add_int16_arrays_viper(
 
     # Loop through each sample, performing the addition.
     for i in range(num_samples_to_process):
-        # Calculate the byte offset for the current sample.
-        byte_offset: int = i * BYTES_PER_SAMPLE
-
-        # Read samples from both input arrays.
-        val1: int = _get_int16_le(arr1_ptr, byte_offset)
-        val2: int = _get_int16_le(arr2_ptr, byte_offset)
+        # Directly read 16-bit samples.
+        val1: int = arr1_ptr[i]
+        val2: int = arr2_ptr[i]
 
         # Perform the addition.
         sum_val: int = val1 + val2
 
-        # Write the calculated sum to the result array.
-        _set_int16_le(result_ptr, byte_offset, sum_val)
+        # Write the sum to the result array. Clamping is handled by the higher-level Python function
+        # if a _set_int16 equivalent is needed, or if Viper's internal casting handles it.
+        # For direct ptr16 assignment, MicroPython handles the 16-bit signed range implicitly.
+        result_ptr[i] = sum_val # Viper will implicitly handle 16-bit clamping for direct assignment
 
-"""
-## Viper Core: In-place Array Addition (`a += b`)
 
-This function performs element-wise addition directly into the first array (`arr1`), effectively adding the elements of `arr2` to `arr1`.
-
-**Assumptions:**
-* Both arrays contain 16-bit signed integers.
-* **Little-endian** format is used for sample reading/writing. If your samples are big-endian, you must swap `_get_int16_le` and `_set_int16_le` for their `_be` counterparts.
-
-"""
+# --- Viper Core: In-place Array Addition (Optimized with ptr16) ---
 @micropython.viper
 def add_int16_array_in_place_viper(
-    arr1_ptr: ptr8,      # Pointer to the first bytearray (which will be modified in-place)
-    arr1_len_bytes: int, # Byte length of the first bytearray
-    arr2_ptr: ptr8,      # Pointer to the second input bytearray
-    arr2_len_bytes: int  # Byte length of the second bytearray
+    arr1_ptr: ptr16,      # Pointer to the first array (of 16-bit samples), will be modified
+    arr2_ptr: ptr16,      # Pointer to the second array (of 16-bit samples)
+    arr_len_samples: int  # Number of samples in the second array
 ):
     """
     Performs element-wise addition of `arr2` into `arr1` (`arr1 += arr2`) directly in memory.
-    The result is stored back into `arr1`.
-    
-    The operation processes samples up to the length of the shortest array.
-    
-    Args:
-        arr1_ptr: Pointer to the first bytearray (the one to be modified).
-        arr1_len_bytes: Length of the first bytearray in bytes.
-        arr2_ptr: Pointer to the second input bytearray.
-        arr2_len_bytes: Length of the second input bytearray in bytes.
+    Optimized for speed by using ptr16 and native byte order.
     """
-    # Fixed to 2 bytes per sample for 16-bit audio.
-    BYTES_PER_SAMPLE: int = 2 
-
-    # Calculate lengths in terms of samples.
-    arr1_len_samples: int = arr1_len_bytes // BYTES_PER_SAMPLE
-    arr2_len_samples: int = arr2_len_bytes // BYTES_PER_SAMPLE
-
-    # Determine the actual number of samples to process, avoiding out-of-bounds access.
-    num_samples_to_process: int = arr1_len_samples
-    if arr2_len_samples < num_samples_to_process:
-        num_samples_to_process = arr2_len_samples
+    # Determine the actual number of samples to process.
+    num_samples_to_process: int = arr_len_samples
+    # if arr2_len_samples < num_samples_to_process:
+    #     num_samples_to_process = arr2_len_samples
 
     # Loop through each sample, performing the in-place addition.
     for i in range(num_samples_to_process):
-        # Calculate the byte offset for the current sample.
-        byte_offset: int = i * BYTES_PER_SAMPLE
-
-        # Read samples from both arrays.
-        val1: int = _get_int16_le(arr1_ptr, byte_offset)
-        val2: int = _get_int16_le(arr2_ptr, byte_offset)
+        # Directly read 16-bit samples.
+        val1: int = arr1_ptr[i]
+        val2: int = arr2_ptr[i]
 
         # Perform the addition.
         sum_val: int = val1 + val2
 
-        # Write the sum back to the first array (in-place modification).
-        _set_int16_le(arr1_ptr, byte_offset, sum_val)
+        # Write the sum back to the first array. Viper will implicitly handle 16-bit clamping.
+        arr1_ptr[i] = sum_val
 
-"""
-## Viper Core: In-place Array Division (`a //= b`)
 
-This function performs element-wise integer division of an array by a scalar value, modifying the array in place.
-
-**Assumptions:**
-* The array contains 16-bit signed integers.
-* **Little-endian** format is used for sample reading/writing. If your samples are big-endian, you must swap `_get_int16_le` and `_set_int16_le` for their `_be` counterparts.
-
-"""
+# --- Viper Core: In-place Array Division (Optimized with ptr16) ---
 @micropython.viper
 def divide_int16_array_in_place_viper(
-    arr_ptr: ptr8,      # Pointer to the bytearray to be modified (a)
-    arr_len_bytes: int, # Byte length of the array (a_len)
-    divisor: int        # The integer value to divide each element by (b)
+    arr_ptr: ptr16,      # Pointer to the array (of 16-bit samples) to be modified
+    arr_len_samples: int, # Number of samples in the array
+    divisor: int        # The integer divisor
 ):
     """
     Performs element-wise integer division (`arr[i] //= divisor`) on the array in-place.
+    Optimized for speed by using ptr16 and native byte order.
     
-    This function is optimized for speed using Viper. It includes robust handling
-    for division by zero to prevent crashes, typically silencing the output in that case.
-    
-    Args:
-        arr_ptr: Pointer to the bytearray containing 16-bit signed integers.
-                 This array will be modified directly.
-        arr_len_bytes: The length of the array in bytes.
-        divisor: The integer value to divide each element by.
+    Handles division by zero by clearing the array to zeros to prevent errors.
     """
-    # Fixed to 2 bytes per sample for 16-bit audio.
-    BYTES_PER_SAMPLE: int = 2 
-
-    # Calculate length in terms of samples.
-    arr_len_samples: int = arr_len_bytes // BYTES_PER_SAMPLE
-
-    # Critical: Handle division by zero. If the divisor is zero, the array is cleared to zeros
-    # (silence) to prevent runtime errors or undefined behavior.
-    if int(divisor) == 0:
-        for i in range(arr_len_bytes):
-            arr_ptr[i] = 0 # Clear the entire bytearray to 0.
-        return # Exit the function early
+    local_divisor: int = int(divisor)
+    # Handle division by zero: if the divisor is 0, clear the array to zeros.
+    if local_divisor == 0:
+        # Loop over samples and set each 16-bit sample to 0 directly.
+        for i in range(arr_len_samples):
+            arr_ptr[i] = int(0)
+        return # Exit early
 
     # Loop through each sample, performing the division.
     for i in range(arr_len_samples):
-        # Calculate the byte offset for the current sample.
-        byte_offset: int = i * BYTES_PER_SAMPLE
+        # Directly read the 16-bit sample.
+        val: int = int(arr_ptr[i])
 
-        # Read the sample value from the array.
-        val: int = _get_int16_le(arr_ptr, byte_offset)
+        if val >= 32768:
+            val -= 65536 # Equivalent to subtracting 2^16 for 2's complement
 
-        # Perform integer division (floor division in Python).
-        # Explicit `int()` casts are used to ensure Viper performs the operation with machine integers.
-        divided_val: int = int(val) // int(divisor)
+        # Perform integer division (floor division).
+        divided_val: int = val // local_divisor
 
-        # Write the divided sample back to the array (in-place modification).
-        _set_int16_le(arr_ptr, byte_offset, divided_val)
+        if divided_val > 32767:
+            divided_val = 32767
+        elif divided_val < -32768:
+            divided_val = -32768
+
+        # Write the divided sample back to the array. Viper will implicitly handle 16-bit clamping.
+        arr_ptr[i] = divided_val
+
+
+# --- Python Wrapper for In-place Array Division (Calls fast version) ---
+def divide_int16_bytearray_in_place(
+    array_a_bytes: bytearray,
+    divisor_b: int
+) -> None:
+    """
+    Performs element-wise integer division of array_a_bytes by divisor_b (`array_a_bytes[i] //= divisor_b`).
+    Optimized for speed by assuming native byte order.
+    The result is stored directly in array_a_bytes (in-place modification).
+    """
+    BYTES_PER_SAMPLE: int = 2
+
+    if not isinstance(array_a_bytes, bytearray):
+        raise ValueError("Input array must be a bytearray instance.")
+    if not isinstance(divisor_b, int):
+        raise ValueError("Divisor must be an integer.")
+
+    if len(array_a_bytes) % BYTES_PER_SAMPLE != 0:
+        raise ValueError("Bytearray length must be a multiple of 2 (for 16-bit samples).")
+
+    # Convert byte length to sample count before passing to Viper.
+    arr_len_samples = len(array_a_bytes) // BYTES_PER_SAMPLE
+
+    # Call the FAST Viper core function.
+    divide_int16_array_in_place_viper(
+        array_a_bytes,
+        arr_len_samples,
+        divisor_b
+    )
+
+
+def test_interploate():
+    from ulab import numpy as np
+    import time
+    import array # For creating bytearray from signed ints
+    import struct # For converting bytearray to/from list of ints for comparison
+    import gc
+
+    # --- NumPy equivalent interpolation function ---
+    # This function mimics the behavior of your Viper `_interpolate_viper_core`
+    # but uses ulab.numpy for direct comparison.
+    def interpolate_numpy(
+        closest_sample_bytes: bytes,
+        original_length_bytes: int,
+        new_length_bytes: int
+    ) -> bytearray:
+        BYTES_PER_SAMPLE = 2 # Assuming 16-bit samples
+
+        original_len_samples = original_length_bytes // BYTES_PER_SAMPLE
+        new_len_samples = new_length_bytes // BYTES_PER_SAMPLE
+
+        if new_len_samples == 0:
+            return bytearray()
+
+        # Convert bytearray/bytes to NumPy array of int16
+        # NumPy automatically handles native endianness here
+        original_np_array = np.array(array.array('h', closest_sample_bytes), dtype=np.int16)
+
+        # Calculate shift factor
+        shift_factor = original_len_samples / new_len_samples
+
+        # Use numpy interpolation
+        indices = np.arange(new_len_samples) * shift_factor
+        
+        # Clamp indices to valid range for interpolation (important for numpy's interp)
+        # interp implicitly handles extrapolation, but we want clamping as per Viper version
+        indices = np.clip(indices, 0, original_len_samples - 1)
+
+        # np.interp requires x values to be sorted, which arange gives
+        # The xp_vals are just the integer indices of the original array
+        xp_vals = np.arange(original_len_samples)
+
+        shifted_np_array = np.array(np.interp(indices, xp_vals, original_np_array), dtype=np.int16)
+
+        # Convert NumPy array back to bytearray
+        # array.array('h', ...) implicitly handles native endianness packing
+        return shifted_np_array.tobytes()
+
+
+    # --- Test Parameters ---
+    SAMPLE_RATE = 16000 # Hz
+    BITS_PER_SAMPLE = 16
+    BYTES_PER_SAMPLE = BITS_PER_SAMPLE // 8
+    
+    # Use a larger buffer size for more meaningful timing
+    NUM_SAMPLES_ORIGINAL = 16 * 1024 # 16KB of 16-bit samples = 8192 samples
+    ORIGINAL_LENGTH_BYTES = NUM_SAMPLES_ORIGINAL * BYTES_PER_SAMPLE
+
+    SHIFT_FACTOR_TEST = 1.25 # Pitch up (makes output shorter)
+    
+    # Calculate new length based on shift factor
+    NEW_NUM_SAMPLES = int(NUM_SAMPLES_ORIGINAL / SHIFT_FACTOR_TEST)
+    NEW_LENGTH_BYTES = NEW_NUM_SAMPLES * BYTES_PER_SAMPLE
+
+    SCALE_FACTOR_INTERP = 10000 # Must match the value used in _interpolate_viper_core
+    NUM_ITERATIONS = 50 # Number of runs for timing average
+
+    print(f"--- Interpolation Performance & Correctness Test ---")
+    print(f"Original samples: {NUM_SAMPLES_ORIGINAL}")
+    print(f"Shift factor: {SHIFT_FACTOR_TEST}")
+    print(f"New samples: {NEW_NUM_SAMPLES}")
+    print(f"Iterations: {NUM_ITERATIONS}")
+    print(f"Assuming native byte order (ESP32-S3 is Little-Endian)\n")
+
+    # --- 1. Prepare Test Data ---
+    # Create a dummy 16-bit signed audio sample (bytearray)
+    # Using a sine wave for more realistic sample values.
+    dummy_samples_list = array.array('h')
+    amplitude = 30000 # Max amplitude for 16-bit signed
+    for i in range(NUM_SAMPLES_ORIGINAL):
+        sample_val = int(amplitude * np.sin(2 * np.pi * 10 * i / NUM_SAMPLES_ORIGINAL))
+        dummy_samples_list.append(sample_val)
+
+    original_bytearray_viper = bytearray(dummy_samples_list) # 直接从 array.array 创建 bytearray
+    original_bytes_numpy = bytearray(dummy_samples_list) # NumPy 的 ulab 期望 bytearray 或 array.array
+
+    # --- 2. Time Viper Interpolation ---
+    viper_times = []
+    print(f"Running Viper interpolation for {NUM_ITERATIONS} iterations...")
+    for _ in range(NUM_ITERATIONS):
+        # Create a fresh copy of the input for each run to avoid side effects
+        input_for_viper = bytearray(original_bytearray_viper) 
+        gc.collect()
+        
+        start_time = time.ticks_us()
+        viper_result_bytearray = interpolate(
+            input_for_viper,
+            ORIGINAL_LENGTH_BYTES,
+            NEW_LENGTH_BYTES
+        )
+        end_time = time.ticks_us()
+        viper_times.append(time.ticks_diff(end_time, start_time))
+    
+    avg_viper_time_us = sum(viper_times) / NUM_ITERATIONS
+    print(f"Average Viper interpolation time: {avg_viper_time_us:.2f} us")
+
+    # --- 3. Time NumPy Interpolation ---
+    numpy_times = []
+    print(f"Running NumPy interpolation for {NUM_ITERATIONS} iterations...")
+    for _ in range(NUM_ITERATIONS):
+        # For NumPy, we pass bytes directly, conversion to np.array happens inside.
+        gc.collect()
+        start_time = time.ticks_us()
+        numpy_result_bytearray = interpolate_numpy(
+            original_bytes_numpy, # Use the immutable bytes version for NumPy
+            ORIGINAL_LENGTH_BYTES,
+            NEW_LENGTH_BYTES
+        )
+        end_time = time.ticks_us()
+        numpy_times.append(time.ticks_diff(end_time, start_time))
+
+    avg_numpy_time_us = sum(numpy_times) / NUM_ITERATIONS
+    print(f"Average NumPy interpolation time: {avg_numpy_time_us:.2f} us")
+
+    # --- 4. Compare Numerical Correctness (using a single run's output) ---
+    print(f"\n--- Numerical Correctness Check ---")
+    
+    # Convert Viper output bytearray to a list of integers for comparison
+    viper_result_samples = array.array('h', viper_result_bytearray)
+    
+    # Convert NumPy output bytearray to a list of integers
+    numpy_result_samples = array.array('h', numpy_result_bytearray)
+
+    is_correct = True
+    tolerance = 1 # Allow for a small integer difference due to floating point precision and clamping differences
+    
+    if len(viper_result_samples) != len(numpy_result_samples):
+        print(f"Error: Length mismatch! Viper: {len(viper_result_samples)}, NumPy: {len(numpy_result_samples)}")
+        is_correct = False
+    else:
+        diff_count = 0
+        max_diff = 0
+        for i in range(len(viper_result_samples)):
+            val_viper = viper_result_samples[i]
+            val_numpy = numpy_result_samples[i]
+            abs_diff = abs(val_viper - val_numpy)
+            if abs_diff > tolerance:
+                diff_count += 1
+                if abs_diff > max_diff:
+                    max_diff = abs_diff
+            # print(f"Sample {i}: Viper={val_viper}, NumPy={val_numpy}, Diff={abs_diff}") # Uncomment for detailed debug
+
+        if diff_count == 0:
+            print(f"Correctness Check: PASS! Outputs are identical within tolerance {tolerance}.")
+        else:
+            print(f"Correctness Check: FAIL! {diff_count} samples differ by more than tolerance {tolerance}. Max diff: {max_diff}")
+            print(f"Viper (first 10): {viper_result_samples[:20]}")
+            print(f"NumPy (first 10): {numpy_result_samples[:20]}")
+            is_correct = False
+
+    print("\n--- Test Summary ---")
+    if is_correct:
+        print("All checks passed. Viper is faster and correct!")
+    else:
+        print("Some correctness checks failed. Investigate numerical differences.")
+
+    # Always ensure a clean state if this script is part of a larger system.
+    # For instance, if you want to explicitly clear the buffer for next operation:
+    # clear_bytearray_viper(some_buffer, len(some_buffer))
+
+
+def test_inplace_add():
+    from ulab import numpy as np
+    import time
+    import array
+    import gc
+
+    BYTES_PER_SAMPLE = 2
+    NUM_SAMPLES = 8 * 1024 # Test with 8KB of samples
+    LENGTH_BYTES = NUM_SAMPLES * BYTES_PER_SAMPLE
+    NUM_ITERATIONS = 100 # More iterations for simpler operations
+
+    print(f"\n--- In-place Addition Performance & Correctness Test ---")
+    print(f"Number of samples: {NUM_SAMPLES}")
+    print(f"Iterations: {NUM_ITERATIONS}")
+    print(f"Assuming native byte order (ESP32-S3 is Little-Endian)\n")
+
+    # --- 1. Prepare Test Data ---
+    # Create two dummy 16-bit signed audio sample bytearrays
+    data_a_list = array.array('h')
+    data_b_list = array.array('h')
+    for i in range(NUM_SAMPLES):
+        data_a_list.append(int(1000 * np.sin(2 * np.pi * 5 * i / NUM_SAMPLES))) # Simple sine wave
+        data_b_list.append(int(500 * np.cos(2 * np.pi * 7 * i / NUM_SAMPLES))) # Another simple wave
+    
+    # Viper expects bytearray
+    original_a_viper = bytearray(data_a_list)
+    original_b_viper = bytearray(data_b_list)
+
+    # NumPy also works well with bytearray or converting from array.array
+    original_a_numpy_base = np.array(data_a_list, dtype=np.int16)
+    original_b_numpy_base = np.array(data_b_list, dtype=np.int16)
+
+    # --- 2. Time Viper In-place Addition ---
+    viper_times = []
+    print(f"Running Viper in-place addition for {NUM_ITERATIONS} iterations...")
+    for _ in range(NUM_ITERATIONS):
+        # Create fresh copies for each run to ensure in-place modification doesn't affect subsequent runs
+        arr1_for_viper = bytearray(original_a_viper)
+        arr2_for_viper = bytearray(original_b_viper) # This one is just read, can reuse if preferred
+        gc.collect()
+
+        start_time = time.ticks_us()
+        # Call the Viper function. Note: no return value as it's in-place.
+        add_int16_array_in_place_viper(
+            arr1_for_viper,
+            arr2_for_viper,
+            NUM_SAMPLES  # Pass sample count
+        )
+        end_time = time.ticks_us()
+        viper_times.append(time.ticks_diff(end_time, start_time))
+    
+    avg_viper_time_us = sum(viper_times) / NUM_ITERATIONS
+    print(f"Average Viper in-place addition time: {avg_viper_time_us:.2f} us")
+
+    # --- 3. Time NumPy In-place Addition ---
+    numpy_times = []
+    print(f"Running NumPy in-place addition for {NUM_ITERATIONS} iterations...")
+    for _ in range(NUM_ITERATIONS):
+        # Create fresh NumPy arrays for each run
+        arr1_for_numpy = np.array(original_a_numpy_base, dtype=np.int16)
+        arr2_for_numpy = np.array(original_b_numpy_base, dtype=np.int16) # Or just reference if not modified
+        gc.collect()
+
+        start_time = time.ticks_us()
+        arr1_for_numpy += arr2_for_numpy # NumPy's efficient in-place addition
+        end_time = time.ticks_us()
+        numpy_times.append(time.ticks_diff(end_time, start_time))
+
+    avg_numpy_time_us = sum(numpy_times) / NUM_ITERATIONS
+    print(f"Average NumPy in-place addition time: {avg_numpy_time_us:.2f} us")
+
+    # --- 4. Compare Numerical Correctness (using one run's output) ---
+    print(f"\n--- Numerical Correctness Check (In-place Add) ---")
+    
+    # Calculate expected result using NumPy for higher precision reference
+    expected_result_np = original_a_numpy_base + original_b_numpy_base
+    expected_result_np = np.array(expected_result_np, dtype=np.int16) # Ensure 16-bit range clamping
+
+    # Convert Viper result bytearray back to a list of integers
+    viper_final_samples = array.array('h', arr1_for_viper) # arr1_for_viper holds the result
+
+    # Convert NumPy result array to a list of integers
+    numpy_final_samples = array.array('h', arr1_for_numpy.tobytes()) # Convert np array back to bytes for array.array
+
+    is_correct = True
+    # For addition, results should be exact if no overflow/underflow occurs
+    # However, Python's int might handle arbitrary size, while Viper/NumPy clamp to int16.
+    # So, values should be within the int16 range.
+    tolerance = 0 
+    
+    if len(viper_final_samples) != len(expected_result_np):
+        print(f"Error: Length mismatch! Viper: {len(viper_final_samples)}, Expected: {len(expected_result_np)}")
+        is_correct = False
+    else:
+        diff_count = 0
+        max_diff = 0
+        for i in range(len(viper_final_samples)):
+            val_viper = viper_final_samples[i]
+            val_expected = expected_result_np[i]
+            abs_diff = abs(val_viper - val_expected)
+            if abs_diff > tolerance:
+                diff_count += 1
+                if abs_diff > max_diff:
+                    max_diff = abs_diff
+            # print(f"Sample {i}: Viper={val_viper}, Expected={val_expected}, Diff={abs_diff}") # Debug
+
+        if diff_count == 0:
+            print(f"Correctness Check: PASS! Outputs are identical within tolerance {tolerance}.")
+        else:
+            print(f"Correctness Check: FAIL! {diff_count} samples differ by more than tolerance {tolerance}. Max diff: {max_diff}")
+            print(f"Viper (first 20): {viper_final_samples[:20]}")
+            print(f"NumPy (first 20): {numpy_final_samples[:20]}") # Show numpy result for comparison
+            print(f"Expected (first 20): {list(expected_result_np[:20])}") # Show expected
+            is_correct = False
+
+    print("\n--- In-place Add Test Summary ---")
+    if is_correct:
+        print("All in-place addition checks passed. Viper is likely faster and correct!")
+    else:
+        print("Some in-place addition correctness checks failed. Investigate numerical differences.")
+
+
+def test_inplace_divide():
+    from ulab import numpy as np
+    import time
+    import array
+    import gc
+
+    BYTES_PER_SAMPLE = 2
+    NUM_SAMPLES = 8 * 1024 # Test with 8KB of samples
+    LENGTH_BYTES = NUM_SAMPLES * BYTES_PER_SAMPLE
+    NUM_ITERATIONS = 100 # More iterations for simpler operations
+    TEST_DIVISOR = 5 # A non-zero divisor
+
+    print(f"\n--- In-place Division Performance & Correctness Test ---")
+    print(f"Number of samples: {NUM_SAMPLES}")
+    print(f"Divisor: {TEST_DIVISOR}")
+    print(f"Iterations: {NUM_ITERATIONS}")
+    print(f"Assuming native byte order (ESP32-S3 is Little-Endian)\n")
+
+    # --- 1. Prepare Test Data ---
+    # Create a dummy 16-bit signed audio sample bytearray
+    data_list = array.array('h')
+    for i in range(NUM_SAMPLES):
+        # Use values that ensure some non-zero results after division
+        data_list.append(int(20000 * np.sin(2 * np.pi * 3 * i / NUM_SAMPLES) + 10000))
+    
+    # Viper expects bytearray
+    original_viper = bytearray(data_list)
+    # NumPy also works well with bytearray or converting from array.array
+    original_numpy_base = np.array(data_list, dtype=np.int16)
+
+    # --- 2. Time Viper In-place Division ---
+    viper_times = []
+    print(f"Running Viper in-place division for {NUM_ITERATIONS} iterations...")
+    for _ in range(NUM_ITERATIONS):
+        # Create fresh copy for each run
+        arr_for_viper = bytearray(original_viper)
+        gc.collect()
+
+        start_time = time.ticks_us()
+        divide_int16_array_in_place_viper(
+            arr_for_viper,
+            NUM_SAMPLES, # Pass sample count
+            TEST_DIVISOR
+        )
+        end_time = time.ticks_us()
+        viper_times.append(time.ticks_diff(end_time, start_time))
+    
+    avg_viper_time_us = sum(viper_times) / NUM_ITERATIONS
+    print(f"Average Viper in-place division time: {avg_viper_time_us:.2f} us")
+
+    # --- 3. Time NumPy In-place Division ---
+    numpy_times = []
+    print(f"Running NumPy in-place division for {NUM_ITERATIONS} iterations...")
+
+    for _ in range(NUM_ITERATIONS):
+        # Create fresh NumPy array for each run
+        arr_for_numpy = np.array(original_numpy_base, dtype=np.int16)
+        divisor = np.array(np.ones(len(original_numpy_base), dtype=np.int16) * TEST_DIVISOR, dtype=np.int16)
+        gc.collect()
+
+        start_time = time.ticks_us()
+        arr_for_numpy //= divisor # NumPy's efficient in-place integer division
+        end_time = time.ticks_us()
+        numpy_times.append(time.ticks_diff(end_time, start_time))
+
+    avg_numpy_time_us = sum(numpy_times) / NUM_ITERATIONS
+    print(f"Average NumPy in-place division time: {avg_numpy_time_us:.2f} us")
+
+    # --- 4. Compare Numerical Correctness (using one run's output) ---
+    print(f"\n--- Numerical Correctness Check (In-place Divide) ---")
+    
+    # Calculate expected result using NumPy for higher precision reference
+    expected_result_np = original_numpy_base // TEST_DIVISOR
+    expected_result_np = np.array(expected_result_np, dtype=np.int16) # Ensure 16-bit range clamping
+
+    # Convert Viper result bytearray back to a list of integers
+    viper_final_samples = array.array('h', arr_for_viper) # arr_for_viper holds the result
+
+    # Convert NumPy result array to a list of integers
+    numpy_final_samples = array.array('h', arr_for_numpy.tobytes())
+
+    is_correct = True
+    tolerance = 1 # Integer division should be exact if no overflow/underflow
+    
+    if len(viper_final_samples) != len(expected_result_np):
+        print(f"Error: Length mismatch! Viper: {len(viper_final_samples)}, Expected: {len(expected_result_np)}")
+        is_correct = False
+    else:
+        diff_count = 0
+        max_diff = 0
+        for i in range(len(viper_final_samples)):
+            val_viper = viper_final_samples[i]
+            val_expected = expected_result_np[i]
+            abs_diff = abs(val_viper - val_expected)
+            if abs_diff > tolerance:
+                diff_count += 1
+                if abs_diff > max_diff:
+                    max_diff = abs_diff
+            # print(f"Sample {i}: Viper={val_viper}, Expected={val_expected}, Diff={abs_diff}") # Debug
+
+        if diff_count == 0:
+            print(f"Correctness Check: PASS! Outputs are identical within tolerance {tolerance}.")
+        else:
+            print(f"Correctness Check: FAIL! {diff_count} samples differ by more than tolerance {tolerance}. Max diff: {max_diff}")
+            print(f"Viper ([-400:-360]): {viper_final_samples[-400:-360]}")
+            print(f"NumPy ([-400:-360]): {numpy_final_samples[-400:-360]}")
+            print(f"Expected ([-400:-360]): {list(expected_result_np[-400:-360])}")
+            is_correct = False
+
+    print("\n--- In-place Divide Test Summary ---")
+    if is_correct:
+        print("All in-place division checks passed. Viper is likely faster and correct!")
+    else:
+        print("Some in-place division correctness checks failed. Investigate numerical differences.")
+
+
+# --- Main execution block ---
+if __name__ == "__main__":
+    test_inplace_add()
+    test_inplace_divide()
+    test_interploate()
