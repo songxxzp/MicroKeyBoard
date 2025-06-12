@@ -287,11 +287,11 @@ class MusicKeyBoard(VirtualKeyBoard):
                     if exists(f"{note_cache_path}/{note}"):
                         wav_data = open(f"{note_cache_path}/{note}", "rb").read()
                     else:
-                        wav_data = self.sampler.get_sample(note, duration=1.8).tobytes()
+                        wav_data = self.sampler.get_sample(note, duration=1.8)
                         with open(f"{note_cache_path}/{note}", "wb") as f:
                             f.write(wav_data)
                 else:
-                    wav_data = self.sampler.get_sample(note, duration=1.8).tobytes()
+                    wav_data = self.sampler.get_sample(note, duration=1.8)
                 self.audio_manager.load_wav(note, wav_data)
                 # micropython.mem_info()
                 gc.collect()
