@@ -242,7 +242,7 @@ class MusicKeyBoard(VirtualKeyBoard):
         audio_manager: Optional[AudioManager] = None,
         mode: str = "C Major",
         note_wav_path: str = "/wav/piano/16000_2s",
-        note_cache_path: Optional[str] = "/cache/piano/16000_1.8s",
+        note_cache_path: Optional[str] = None,
         key_config_path: str = "/config/physical_keyboard.json",
         *args,
         **kwargs
@@ -266,13 +266,13 @@ class MusicKeyBoard(VirtualKeyBoard):
                 audio_manager = AudioManager(
                     rate=16000,
                     buffer_samples=1024,
-                    ibuf=4096,
+                    ibuf=8192,
                     always_play=True,
                     sck_pin=sck_pin,
                     ws_pin=ws_pin,
                     sd_pin=sd_pin,
                     en_pin=en_pin,
-                    # volume_factor=0.1
+                    volume_factor=1
                 )
 
             self.audio_manager = audio_manager

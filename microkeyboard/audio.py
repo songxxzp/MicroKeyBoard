@@ -1,5 +1,6 @@
 import time
 import os
+import math
 
 import umidiparser
 
@@ -8,7 +9,7 @@ from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
 
 from microkeyboard.utils import debugging, exists, partial
-from microkeyboard.ops import clear_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper
+from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper
 
 
 def note_to_midinumber(note: str) -> int:
@@ -162,7 +163,7 @@ class Sampler:
     def __init__(self,
         sample_dir : str,
         rate : int = 16000,
-        volume_factor: float = 0.1,
+        volume_factor: float = 1,
     ):
         """
         Initialize the sampler
@@ -301,10 +302,16 @@ class Sampler:
 
 
 class AudioManager:
-    # Define buffer size in samples
-    # Based on user's BUFFER_BYTES = 4096 and bytes_per_sample = 2 (16-bit mono)
+    """
+    Process 16-bit mono audio.
+    Use 32-bit I2S to prevent overflow during processing.
+    """
+
     BUFFER_SAMPLES = 1024
-    BUFFER_BYTES = BUFFER_SAMPLES * 2 # Calculate bytes based on samples (assuming 16-bit mono)
+    BUFFER_BIT = 2
+    BUFFER_BYTES = BUFFER_SAMPLES * BUFFER_BIT # Calculate bytes based on samples (assuming 16-bit mono)
+    I2S_BUFFER_BIT = 4
+    I2S_BUFFER_BYTES = BUFFER_SAMPLES * I2S_BUFFER_BIT
 
     def __init__(
         self,
@@ -319,14 +326,16 @@ class AudioManager:
         ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
-        volume_factor: float = 0.1,
+        volume_factor: float = 0.125,
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
              raise ValueError("Supports only 16-bit MONO audio")
 
         self.BUFFER_SAMPLES = buffer_samples
-        self.BUFFER_BYTES = self.BUFFER_SAMPLES * 2
+        self.BUFFER_BYTES = self.BUFFER_SAMPLES * self.BUFFER_BIT
+        self.I2S_BUFFER_BYTES = self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT
+
         self.always_play = always_play
 
         if en_pin is None:
@@ -340,7 +349,7 @@ class AudioManager:
             ws=Pin(ws_pin),
             sd=Pin(sd_pin),
             mode=I2S.TX,
-            bits=bits,
+            bits=self.I2S_BUFFER_BIT * 8,  # I2S use 32 bit to prevent overflow
             format=format,
             rate=rate,
             ibuf=ibuf,
@@ -350,14 +359,14 @@ class AudioManager:
         self.format = format
         self.rate = rate
         self.max_voices = max_voices
-        self.bytes_per_sample = (self.bits // 8) * (self.format + 1) # Should be 2
+        self.bytes_per_sample = (self.bits // 8) * (self.format + 1)  # Should be 2
         self.volume_factor = volume_factor  # TODO: use for es8156 or es8311 hardware volume
         # TODO: add software volume controll
 
         # Double buffers (NumPy int16 arrays)
         self.audio_buffers = (
-            memoryview(bytearray(self.BUFFER_BYTES)),
-            memoryview(bytearray(self.BUFFER_BYTES))
+            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT)),
+            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT))
         )
 
         # Valid samples mixed into each buffer
@@ -366,9 +375,6 @@ class AudioManager:
 
         # File Caching
         self._loaded_wavs: Dict[str, Union[bytearray, memoryview]] = {} # Stores {filepath: bytearray_data}
-
-        # Temporary NumPy buffer to compute volume
-        self.volume_buffer_int16 = memoryview(bytearray(self.BUFFER_SAMPLES * 2))
 
         # Playback state
         self._is_playing = False
@@ -417,7 +423,7 @@ class AudioManager:
     def _prepare_buffer(self, buffer_idx: int):
         """Mixes active voices (from memory) using NumPy."""
         target_buffer_np = self.audio_buffers[buffer_idx]
-        clear_bytearray_viper(target_buffer_np, self.BUFFER_BYTES)
+        clear_4bit_bytearray_viper(target_buffer_np, self.BUFFER_SAMPLES)
 
         total_samples_mixed = 0
 
@@ -461,31 +467,30 @@ class AudioManager:
                     print(f"stopping '{voice_id}, {voice_id}' at {current_ms}.")
                 continue
 
-            # Get memory slice for the current chunk (np.int16)
-            num_read_samples = min(self.BUFFER_SAMPLES, len(loaded_data) // 2 - current_pos)
+            num_data_samples = len(loaded_data) // self.BUFFER_BIT
+            num_read_samples = min(self.BUFFER_SAMPLES, num_data_samples - current_pos)
 
             if num_read_samples > 0:
                 # Mix into the target buffer using addition
                 # Ensure slices match size
-                # target(int16) += data[start : end](int16) * volume(float)
-                
-                # TODO: use equal
-                temp_int16_chunk = loaded_data[current_pos * 2: (current_pos + self.BUFFER_SAMPLES) * 2]
-                clear_bytearray_viper(self.volume_buffer_int16, len(self.volume_buffer_int16))
-                add_int16_array_in_place_viper(self.volume_buffer_int16, temp_int16_chunk, num_read_samples)
+                # TODO: target(int32) += data[start : end](int16) * volume(float)
 
-                if self.volume_factor > 0:
-                    divide_int16_array_in_place_viper(self.volume_buffer_int16, self.BUFFER_SAMPLES, int(1 // self.volume_factor))
-                add_int16_array_in_place_viper(target_buffer_np, self.volume_buffer_int16, self.BUFFER_SAMPLES)
+                int32_add_int16_in_place_viper(target_buffer_np, 0, loaded_data, current_pos, num_read_samples)
 
                 total_samples_mixed = max(total_samples_mixed, num_read_samples)  
                 # Update position for this voice (in bytes)
                 voice_info.current_pos += num_read_samples
 
             # Check if this voice finished reading (reached end of loaded data)
-            if current_pos + num_read_samples >= len(loaded_data) // 2:
+            if current_pos + num_read_samples >= num_data_samples:
                 voice_info.finished = True
-                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, len(loaded_data) // 2)}")
+                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, num_data_samples)}")
+
+        # control voice volumn
+        # I2S.shift(target_buffer_np, self.I2S_BUFFER_BIT, int(math.log(self.volume_factor)))
+        # int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13))
+        int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13 + math.log(self.volume_factor, 2)))
+        # divide_int32_array_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(1 // self.volume_factor))
 
         # Remove finished voices
         for active_voice in self.active_voices:
@@ -514,7 +519,7 @@ class AudioManager:
             self.audio_out.write(byte_data)
             write_tiggered = True
         elif samples_to_play > 0:
-            byte_data = self.audio_buffers[play_idx][:samples_to_play * self.bytes_per_sample]
+            byte_data = self.audio_buffers[play_idx][:samples_to_play * 4]
             self.audio_out.write(byte_data)
             write_tiggered = True
 
@@ -579,8 +584,8 @@ class AudioManager:
 
             # Prepare the initial two buffers (in main thread)
             audio_buffer_a, audio_buffer_b = self.audio_buffers
-            clear_bytearray_viper(audio_buffer_a, len(audio_buffer_a))
-            clear_bytearray_viper(audio_buffer_b, len(audio_buffer_b))
+            clear_4bit_bytearray_viper(audio_buffer_a, self.BUFFER_SAMPLES)
+            clear_4bit_bytearray_viper(audio_buffer_b, self.BUFFER_SAMPLES)
             self.valid_samples[0] = self.BUFFER_SAMPLES
             self.valid_samples[1] = self.BUFFER_SAMPLES
             byte_data_init = self.audio_buffers[0]
@@ -621,8 +626,8 @@ class AudioManager:
 
             # Reset buffer state (NumPy buffers)
             audio_buffer_a, audio_buffer_b = self.audio_buffers
-            clear_bytearray_viper(audio_buffer_a, len(audio_buffer_a))
-            clear_bytearray_viper(audio_buffer_b, len(audio_buffer_b))
+            clear_4bit_bytearray_viper(audio_buffer_a, self.BUFFER_SAMPLES)
+            clear_4bit_bytearray_viper(audio_buffer_b, self.BUFFER_SAMPLES)
             self.valid_samples = [0, 0]
             self.buffer_to_play_idx = 0
 
@@ -714,7 +719,6 @@ def main():
         audio_manager.load_wav(note, wav_data)
     print("Loading complete.")
 
-
     quarter = 556
     eighth = 278
     sixteenth = 139
@@ -762,7 +766,7 @@ def midi_example():
     audio_manager = AudioManager(
         rate=16000,
         buffer_samples=1024,
-        ibuf=4096,
+        ibuf=8192,
         always_play=True,
         # volume_factor=0.1
     )

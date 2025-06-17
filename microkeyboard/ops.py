@@ -165,6 +165,15 @@ def clear_bytearray_viper(buf: ptr8, length: int):
         buf[i] = 0
 
 
+@micropython.viper
+def clear_4bit_bytearray_viper(buf: ptr32, length: int):
+    """
+    Clears all bytes in a bytearray to 0 using Viper for maximum efficiency.
+    This function remains ptr32 as it operates on individual bytes.
+    """
+    for i in range(length):
+        buf[i] = 0
+
 # --- Viper Core: Element-wise Array Addition (Optimized with ptr16) ---
 @micropython.viper
 def add_int16_arrays_viper(
@@ -214,9 +223,7 @@ def add_int16_array_in_place_viper(
     Optimized for speed by using ptr16 and native byte order.
     """
     # Determine the actual number of samples to process.
-    num_samples_to_process: int = arr_len_samples
-    # if arr2_len_samples < num_samples_to_process:
-    #     num_samples_to_process = arr2_len_samples
+    num_samples_to_process: int = int(arr_len_samples)
 
     # Loop through each sample, performing the in-place addition.
     for i in range(num_samples_to_process):
@@ -229,6 +236,77 @@ def add_int16_array_in_place_viper(
 
         # Write the sum back to the first array. Viper will implicitly handle 16-bit clamping.
         arr1_ptr[i] = sum_val
+
+
+@micropython.viper
+def int32_add_int16_in_place_viper(
+    arr1_ptr: ptr32,      # Pointer to the first array (of 32-bit samples), will be modified
+    arr1_start_pos: int,
+    arr2_ptr: ptr16,      # Pointer to the second array (of 16-bit samples)
+    arr2_start_pos: int,
+    arr_len_samples: int  # Number of samples in the second array
+):
+    num_samples_to_process: int = int(arr_len_samples)
+
+    for i in range(num_samples_to_process):
+        val1: int = arr1_ptr[arr1_start_pos + i]
+        val2: int = arr2_ptr[arr2_start_pos + i]
+        if val2 >= 32768:
+            val2 -= 65536 # Equivalent to subtracting 2^16 for 2's complement
+        sum_val: int = val1 + val2
+        arr1_ptr[arr1_start_pos + i] = sum_val
+
+
+@micropython.viper
+def int32_left_shift_in_place_viper(
+    arr_ptr: ptr32,
+    arr_len_samples: int,  # Number of samples in the second array
+    arr_left_shift: int
+):
+    for i in range(arr_len_samples):
+        val: int = arr_ptr[i]
+        shifted_val: int = (val << arr_left_shift)
+        arr_ptr[i] = shifted_val
+
+
+@micropython.viper
+def divide_int32_array_in_place_viper(
+    arr_ptr: ptr32,      # Pointer to the array (of 32-bit samples) to be modified
+    arr_len_samples: int, # Number of samples in the array
+    divisor: int        # The integer divisor
+):
+    """
+    Performs element-wise integer division (`arr[i] //= divisor`) on the array in-place.
+    Optimized for speed by using ptr32 and native byte order.
+    
+    Handles division by zero by clearing the array to zeros to prevent errors.
+    """
+    local_divisor: int = int(divisor)
+    # Handle division by zero: if the divisor is 0, clear the array to zeros.
+    if local_divisor == 0:
+        # Loop over samples and set each 32-bit sample to 0 directly.
+        for i in range(arr_len_samples):
+            arr_ptr[i] = int(0)
+        return # Exit early
+
+    # Loop through each sample, performing the division.
+    for i in range(arr_len_samples):
+        # Directly read the 16-bit sample.
+        val: int = int(arr_ptr[i])
+
+        # if val >= 32768:
+        #     val -= 65536 # Equivalent to subtracting 2^16 for 2's complement
+
+        # Perform integer division (floor division).
+        divided_val: int = val // local_divisor
+
+        # if divided_val > 32767:
+        #     divided_val = 32767
+        # elif divided_val < -32768:
+        #     divided_val = -32768
+
+        # Write the divided sample back to the array. Viper will implicitly handle 16-bit clamping.
+        arr_ptr[i] = divided_val
 
 
 # --- Viper Core: In-place Array Division (Optimized with ptr16) ---
