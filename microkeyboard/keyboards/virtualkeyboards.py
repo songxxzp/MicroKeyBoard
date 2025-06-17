@@ -266,7 +266,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                 audio_manager = AudioManager(
                     rate=16000,
                     buffer_samples=1024,
-                    ibuf=8192,
+                    i2s_buf_samples=4096,
                     always_play=True,
                     sck_pin=sck_pin,
                     ws_pin=ws_pin,

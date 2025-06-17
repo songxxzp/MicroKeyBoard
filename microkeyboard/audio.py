@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
 
 from microkeyboard.utils import debugging, exists, partial
-from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper
+from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper, interpolate_int32_viper_ptr32
 
 
 def note_to_midinumber(note: str) -> int:
@@ -323,16 +323,20 @@ class AudioManager:
         bits: int = 16,
         format=I2S.MONO,
         rate=16000,
-        ibuf: int = 8192,
+        # ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
+        i2s_buf_samples: int = 4096,
+        i2s_rate: int = 32000,
         volume_factor: float = 0.125,
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
              raise ValueError("Supports only 16-bit MONO audio")
+        assert i2s_rate % rate == 0, f"i2s_rate({i2s_rate}) mod rate({rate}) != 0"
 
         self.BUFFER_SAMPLES = buffer_samples
+        self.I2S_RATE = i2s_rate
         self.BUFFER_BYTES = self.BUFFER_SAMPLES * self.BUFFER_BIT
         self.I2S_BUFFER_BYTES = self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT
 
@@ -351,8 +355,8 @@ class AudioManager:
             mode=I2S.TX,
             bits=self.I2S_BUFFER_BIT * 8,  # I2S use 32 bit to prevent overflow
             format=format,
-            rate=rate,
-            ibuf=ibuf,
+            rate=self.I2S_RATE,
+            ibuf=i2s_buf_samples * self.I2S_BUFFER_BIT * (i2s_rate // rate),
         )
 
         self.bits = bits
@@ -368,6 +372,7 @@ class AudioManager:
             memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT)),
             memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT))
         )
+        self.cal_buffer = memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT * (i2s_rate // rate)))
 
         # Valid samples mixed into each buffer
         self.valid_samples = [0, 0]
@@ -487,10 +492,7 @@ class AudioManager:
                 # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, num_data_samples)}")
 
         # control voice volumn
-        # I2S.shift(target_buffer_np, self.I2S_BUFFER_BIT, int(math.log(self.volume_factor)))
-        # int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13))
         int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13 + math.log(self.volume_factor, 2)))
-        # divide_int32_array_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(1 // self.volume_factor))
 
         # Remove finished voices
         for active_voice in self.active_voices:
@@ -516,11 +518,15 @@ class AudioManager:
         # Write the prepared buffer to I2S if it has data
         if self.always_play or samples_to_play == self.BUFFER_SAMPLES:
             byte_data = self.audio_buffers[play_idx]
-            self.audio_out.write(byte_data)
+            interpolate_int32_viper_ptr32(byte_data, self.BUFFER_SAMPLES, self.cal_buffer, self.BUFFER_SAMPLES * self.I2S_RATE // self.rate)
+            self.audio_out.write(self.cal_buffer)
+            # self.audio_out.write(byte_data)
             write_tiggered = True
         elif samples_to_play > 0:
-            byte_data = self.audio_buffers[play_idx][:samples_to_play * 4]
-            self.audio_out.write(byte_data)
+            byte_data = self.audio_buffers[play_idx][:samples_to_play * self.I2S_BUFFER_BIT]
+            interpolate_int32_viper_ptr32(byte_data, self.BUFFER_SAMPLES, self.cal_buffer, self.BUFFER_SAMPLES * self.I2S_RATE // self.rate)
+            self.audio_out.write(self.cal_buffer[:samples_to_play * self.I2S_BUFFER_BIT * self.I2S_RATE // self.rate])
+            # self.audio_out.write(byte_data)
             write_tiggered = True
 
         # Update state for the next IRQ
@@ -698,13 +704,16 @@ class MIDIPlayer():
         self.playing = False
 
 
-def main():
+def main(audio_manager):
     time.sleep_ms(1000) # Sleep before starting audio
-    audio_manager = AudioManager(
-        rate=16000,
-        buffer_samples=512,
-        always_play=False
-    )
+    # audio_manager = AudioManager(
+    #     sck_pin = 42,
+    #     ws_pin = 40,
+    #     sd_pin = 41,
+    #     rate=16000,
+    #     buffer_samples=512,
+    #     always_play=False
+    # )
 
     # Load WAV files into memory first
     print("Loading WAVs...")
@@ -758,18 +767,10 @@ def main():
     audio_manager.stop_all()
 
 
-def midi_example():
+def midi_example(audio_manager, file_path = "mid/fukakai - KAF - Piano.mid"):
     import gc
-    file_path = "mid/fukakai - KAF - Piano.mid"
 
     time.sleep_ms(1000) # Sleep before starting audio
-    audio_manager = AudioManager(
-        rate=16000,
-        buffer_samples=1024,
-        ibuf=8192,
-        always_play=True,
-        # volume_factor=0.1
-    )
 
     # Load WAV files into memory first
     print("Loading WAVs...")
@@ -855,5 +856,25 @@ def midi_example():
 
 
 if __name__ == "__main__":
-    # main()
-    midi_example()
+    # audio_manager = AudioManager(
+    #     sck_pin = 42,
+    #     ws_pin = 40,
+    #     sd_pin = 41,
+    #     rate=16000,
+    #     buffer_samples=512,
+    #     always_play=False
+    # )
+    # main(audio_manager)
+
+    audio_manager = AudioManager(
+        sck_pin = 42,
+        ws_pin = 40,
+        sd_pin = 41,
+        rate=16000,
+        buffer_samples=1024,
+        i2s_rate=48000,
+        i2s_buf_samples=4096,
+        always_play=True,
+        volume_factor=0.0625
+    )
+    midi_example(audio_manager)
