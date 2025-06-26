@@ -21,7 +21,7 @@ def main():
     check_disk_space()
     time.sleep_ms(1000)
     virtual_key_board = VirtualKeyBoard(
-        mapping_path="/config/virtual_keymaps.json",
+        mapping_path="/config/virtual_keymaps",
         key_config_path="/config/physical_keyboard.json"
     )
 
@@ -30,12 +30,11 @@ def main():
     start_time = time.ticks_ms()
     current_time = time.ticks_ms()
 
-    virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
-    virtual_key_board.bind_fn_layer_func("N", pressed_function=virtual_key_board.phsical_key_board.led_manager.next_background)
-    virtual_key_board.bind_fn_layer_func("P", pressed_function=debug_switch)
+    # virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
+    # virtual_key_board.bind_fn_layer_func("N", pressed_function=virtual_key_board.phsical_key_board.led_manager.next_background)
+    # virtual_key_board.bind_fn_layer_func("P", pressed_function=debug_switch)
     # virtual_key_board.bind_fn_layer_func("OPEN_BRACKET", pressed_function=partial(machine.freq, 80000000))
     # virtual_key_board.bind_fn_layer_func("CLOSE_BRACKET", pressed_function=partial(machine.freq, 240000000))
-
 
     last_print_start = time.ticks_ms()
     last_print_delay = 0
