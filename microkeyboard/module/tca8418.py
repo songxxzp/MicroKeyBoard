@@ -2,8 +2,10 @@
 # Converted from Adafruit CircuitPython library:
 # https://github.com/adafruit/Adafruit_CircuitPython_TCA8418/blob/main/adafruit_tca8418.py
 
-from micropython import const
 import machine
+
+from micropython import const
+from typing import Optional
 
 # TCA8418 Register Addresses
 TCA8418_I2CADDR_DEFAULT = const(0x34)
@@ -220,10 +222,11 @@ class TCA8418:
     def get_key_intenable(self) -> bool: return self._get_reg_bit(_TCA8418_REG_CONFIG, 0)
     def set_key_intenable(self, value: bool) -> None: self._set_reg_bit(_TCA8418_REG_CONFIG, 0, value)
 
-    def read_next_event(self) -> int:
+    def read_next_event(self) -> Optional[int]:
         """Read the next key event from the FIFO"""
         if self.get_events_count() == 0:
-            raise RuntimeError("No events in FIFO")
+            return None
+            # raise RuntimeError("No events in FIFO")
         # Read from the KEYEVENT register (FIFO)
         return self._read_reg(_TCA8418_REG_KEYEVENT)
 

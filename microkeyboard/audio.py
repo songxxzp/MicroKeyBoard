@@ -1,19 +1,15 @@
 import time
 import os
+import math
 
 import umidiparser
 
-from machine import Pin
-from machine import I2S
+from machine import Pin, I2S
 from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
-from utils import debugging
 
-from utils import exists, partial
-try:
-    import numpy as np
-except:
-    from ulab import numpy as np
+from microkeyboard.utils import debugging, exists, partial
+from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper
 
 
 def note_to_midinumber(note: str) -> int:
@@ -109,7 +105,7 @@ class Voice:
     def __init__(
             self,
             voice_id: Optional[int] = None,
-            loaded_data: Optional[np.ndarray] = None,
+            loaded_data: Optional[Union[bytes, bytearray, memoryview]] = None,
             current_pos: Optional[int] = None,
             voice_name: Optional[str] = None,
             start_time: Optional[int] = None,
@@ -118,7 +114,7 @@ class Voice:
             valid: bool = True,
         ):
         self.voice_id = voice_id
-        self.loaded_data = loaded_data
+        self.loaded_data = loaded_data if isinstance(loaded_data, memoryview) or loaded_data is None else memoryview(loaded_data)
         self.current_pos = current_pos
         self.voice_name = voice_name
         self.start_time = start_time or time.ticks_ms()
@@ -135,7 +131,7 @@ class Voice:
     def reinit(
             self,
             voice_id: int,
-            loaded_data: np.ndarray,
+            loaded_data: Union[bytearray, memoryview],
             current_pos: int,
             voice_name: Optional[str] = None,
             start_time: Optional[int] = None,
@@ -144,7 +140,7 @@ class Voice:
             valid: bool = True,
         ):
         self.voice_id = voice_id
-        self.loaded_data = loaded_data
+        self.loaded_data = loaded_data if isinstance(loaded_data, memoryview) else memoryview(loaded_data)
         self.current_pos = current_pos
         self.voice_name = voice_name
         self.start_time = start_time or time.ticks_ms()
@@ -167,7 +163,7 @@ class Sampler:
     def __init__(self,
         sample_dir : str,
         rate : int = 16000,
-        volume_factor: float = 0.1,
+        volume_factor: float = 1,
     ):
         """
         Initialize the sampler
@@ -179,25 +175,34 @@ class Sampler:
         self.volume_factor = volume_factor
         self.samples = {}  # Store sample filepath
         self.keys = []     # Store the keys (pitches) of the sample notes
+        self.sample_cache = None
+        self.sample_cache_name = None
         self.load_samples()
 
-    def load_sample(self, filename, duration: Optional[float] = None):
+    def load_sample(self, filename, duration: Optional[float] = None) -> bytes:
         """
         Load sample file to memory
         """
-        with open(f"{self.sample_dir}/{filename}", "rb") as f:
+        filepath = f"{self.sample_dir}/{filename}"
+        # print(f"load_sample({filepath})")
+        if self.sample_cache_name == filepath:
+            # print("load_sample cache hit")
+            return memoryview(bytearray(self.sample_cache) )
+        with open(filepath, "rb") as f:
             f.seek(44)  # Skip the WAV file header
             if duration is not None and duration > 0:
                 # Calculate number of samples needed
                 num_samples_to_read = int(duration * self.rate)
                 # Calculate number of bytes needed (16-bit int = 2 bytes per sample)
                 num_bytes_to_read = num_samples_to_read * 2
-                
+
                 # Read the specified number of bytes
-                raw = np.frombuffer(f.read(num_bytes_to_read), dtype=np.int16)
+                raw = f.read(num_bytes_to_read)
             else:
-                raw = np.frombuffer(f.read(), dtype=np.int16)
-        return raw
+                raw = f.read()
+        self.sample_cache_name = filepath
+        self.sample_cache = raw
+        return memoryview(bytearray(raw))
 
     def load_samples(self, dummy=True):
         """
@@ -240,8 +245,9 @@ class Sampler:
         else:
             # If the note does not exist, use pitch shifting to generate it
             sample = self.pitch_shift(note, duration=duration)
-        if self.volume_factor > 0:
-            sample //= int(1 / self.volume_factor)  # TODO: check memory fragment
+        # TODO: consider pad to length
+        if self.volume_factor > 0 and self.volume_factor != 1:
+            divide_int16_array_in_place_viper(sample, len(sample) // 2, int(1 / self.volume_factor))
         return sample
 
     def pitch_shift(self, note, duration: Optional[float] = None):
@@ -258,20 +264,21 @@ class Sampler:
         shift_factor = target_freq / closest_freq
 
         # Load closest sample
-        closest_sample = self.load_sample(closest_sample_path, duration=None if duration is None else (duration+0.1)*shift_factor)
+        closest_sample: Union[bytes, bytearray] = self.load_sample(closest_sample_path, duration=None if duration is None else (duration+0.1)*shift_factor)
 
         # Use numpy interpolation to achieve pitch shifting
         original_length = len(closest_sample)
         new_length = int(original_length / shift_factor)
-        indices = np.arange(new_length) * shift_factor
-        indices = indices[indices < original_length]  # Ensure indices are within range
-        shifted_sample = np.interp(indices, np.arange(original_length), closest_sample)
+
+        # raise NotImplementedError("Viper interpolate not checked!")
+        shifted_sample = interpolate(closest_sample, original_length * 2, new_length * 2)
+        # TODO: interpolate_inplace
 
         if duration is not None and duration > 0:
             target_samples = int(duration * self.rate)
-            return np.array(shifted_sample[:target_samples], dtype=np.int16)
+            return shifted_sample[:2 * target_samples]  # np.array(shifted_sample[:target_samples], dtype=np.int16)
 
-        return np.array(shifted_sample, dtype=np.int16)
+        return memoryview(shifted_sample)  # np.array(shifted_sample, dtype=np.int16)
 
     def find_closest_sample(self, target_freq):
         """
@@ -295,10 +302,16 @@ class Sampler:
 
 
 class AudioManager:
-    # Define buffer size in samples
-    # Based on user's BUFFER_BYTES = 4096 and bytes_per_sample = 2 (16-bit mono)
+    """
+    Process 16-bit mono audio.
+    Use 32-bit I2S to prevent overflow during processing.
+    """
+
     BUFFER_SAMPLES = 1024
-    BUFFER_BYTES = BUFFER_SAMPLES * 2 # Calculate bytes based on samples (assuming 16-bit mono)
+    BUFFER_BIT = 2
+    BUFFER_BYTES = BUFFER_SAMPLES * BUFFER_BIT # Calculate bytes based on samples (assuming 16-bit mono)
+    I2S_BUFFER_BIT = 4
+    I2S_BUFFER_BYTES = BUFFER_SAMPLES * I2S_BUFFER_BIT
 
     def __init__(
         self,
@@ -313,14 +326,16 @@ class AudioManager:
         ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
-        volume_factor: float = 0.1,
+        volume_factor: float = 0.125,
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
              raise ValueError("Supports only 16-bit MONO audio")
 
         self.BUFFER_SAMPLES = buffer_samples
-        self.BUFFER_BYTES = self.BUFFER_SAMPLES * 2
+        self.BUFFER_BYTES = self.BUFFER_SAMPLES * self.BUFFER_BIT
+        self.I2S_BUFFER_BYTES = self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT
+
         self.always_play = always_play
 
         if en_pin is None:
@@ -334,7 +349,7 @@ class AudioManager:
             ws=Pin(ws_pin),
             sd=Pin(sd_pin),
             mode=I2S.TX,
-            bits=bits,
+            bits=self.I2S_BUFFER_BIT * 8,  # I2S use 32 bit to prevent overflow
             format=format,
             rate=rate,
             ibuf=ibuf,
@@ -344,32 +359,22 @@ class AudioManager:
         self.format = format
         self.rate = rate
         self.max_voices = max_voices
-        self.bytes_per_sample = (self.bits // 8) * (self.format + 1) # Should be 2
+        self.bytes_per_sample = (self.bits // 8) * (self.format + 1)  # Should be 2
         self.volume_factor = volume_factor  # TODO: use for es8156 or es8311 hardware volume
         # TODO: add software volume controll
 
         # Double buffers (NumPy int16 arrays)
-        self.audio_bytebuffers = (
-            memoryview(bytearray(self.BUFFER_BYTES)),
-            memoryview(bytearray(self.BUFFER_BYTES))
+        self.audio_buffers = (
+            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT)),
+            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT))
         )
 
-        self.audio_buffers = (
-            np.frombuffer(self.audio_bytebuffers[0], dtype=np.int16),
-            np.frombuffer(self.audio_bytebuffers[1], dtype=np.int16)
-        )
         # Valid samples mixed into each buffer
         self.valid_samples = [0, 0]
         self.buffer_to_play_idx = 0 # Index of buffer to play next
 
         # File Caching
-        self._loaded_wavs: Dict[str, np.ndarray] = {} # Stores {filepath: bytearray_data}
-
-        # Temporary NumPy buffer to compute volume
-        self.volume_buffer_int16 = np.zeros(self.BUFFER_SAMPLES, dtype=np.int16)
-        # self.volume_factor_buffer = np.ones(self.BUFFER_SAMPLES, dtype=np.int16)
-        # if volume_factor > 0:
-        #     self.volume_factor_buffer *= int(1 / volume_factor) 
+        self._loaded_wavs: Dict[str, Union[bytearray, memoryview]] = {} # Stores {filepath: bytearray_data}
 
         # Playback state
         self._is_playing = False
@@ -385,18 +390,16 @@ class AudioManager:
         if self.always_play:
             self._i2s_callback(self)
 
-    # def change_volume_factor(self, volume_factor: float):
-    #     self.volume_factor = volume_factor
-    #     if self.volume_factor > 0:
-    #         self.volume_factor_buffer[:] = int(1.0 / self.volume_factor)  # I2S.shift
+    def change_volume_factor(self, volume_factor: float):
+        self.volume_factor = volume_factor
 
     def enable_irq(self):
         self.audio_out.irq(self._i2s_callback)
-    
+
     def disable_irq(self):
         self.audio_out.irq(None)
 
-    def load_wav(self, wav_file: str, wav_data: Optional[bytearray] = None):
+    def load_wav(self, wav_file: str, wav_data: Optional[Union[memoryview, bytearray, bytes]] = None):
         """Loads WAV file data into memory cache."""
         if wav_file in self._loaded_wavs:
             print(f"'{wav_file}' already loaded.")
@@ -406,11 +409,10 @@ class AudioManager:
             print(f"Loading '{wav_file}'...")
             with open(wav_file, "rb") as f:
                 f.seek(44) # Skip WAV header
-                wav_data = bytearray(f.read())  # TODO: use readinto
-                # loaded_np_array = np.fromfile(f, dtype=np.int16)
-        loaded_np_array = np.frombuffer(wav_data, dtype=np.int16)
+                wav_data = memoryview(bytearray(f.read()))  # TODO: use readinto
+        loaded_np_array = memoryview(wav_data)
         self._loaded_wavs[wav_file] = loaded_np_array
-        print(f"Loaded '{wav_file}' ({loaded_np_array.size} np.int16).")
+        print(f"Loaded '{wav_file}' ({len(loaded_np_array)} bytes).")
         return wav_data
 
     def unload_wav(self, wav_file: str):
@@ -421,7 +423,7 @@ class AudioManager:
     def _prepare_buffer(self, buffer_idx: int):
         """Mixes active voices (from memory) using NumPy."""
         target_buffer_np = self.audio_buffers[buffer_idx]
-        target_buffer_np -= target_buffer_np  # Clear target NumPy buffer
+        clear_4bit_bytearray_viper(target_buffer_np, self.BUFFER_SAMPLES)
 
         total_samples_mixed = 0
 
@@ -465,39 +467,30 @@ class AudioManager:
                     print(f"stopping '{voice_id}, {voice_id}' at {current_ms}.")
                 continue
 
-            # Get memory slice for the current chunk (np.int16)
-            num_read_samples = min(self.BUFFER_SAMPLES, loaded_data.size - current_pos)
+            num_data_samples = len(loaded_data) // self.BUFFER_BIT
+            num_read_samples = min(self.BUFFER_SAMPLES, num_data_samples - current_pos)
 
             if num_read_samples > 0:
-                # Mix into the target buffer using NumPy addition
+                # Mix into the target buffer using addition
                 # Ensure slices match size
-                temp_int16_chunk = loaded_data[current_pos: current_pos + self.BUFFER_SAMPLES]
-                # if self.volume_factor > 0:
-                #     self.volume_buffer_int16 -= self.volume_buffer_int16
-                #     if num_read_samples == self.BUFFER_SAMPLES:
-                #         self.volume_buffer_int16 += temp_int16_chunk
-                #     else:
-                #         volume_buffer = self.volume_buffer_int16[:num_read_samples]
-                #         volume_buffer += temp_int16_chunk
-                #     self.volume_buffer_int16 //= self.volume_factor_buffer
-                #     target_buffer_np += self.volume_buffer_int16
-                
-                self.volume_buffer_int16 -= self.volume_buffer_int16
-                if num_read_samples == self.BUFFER_SAMPLES:
-                    self.volume_buffer_int16 += temp_int16_chunk
-                else:
-                    volume_buffer = self.volume_buffer_int16[:num_read_samples]
-                    volume_buffer += temp_int16_chunk
-                target_buffer_np += self.volume_buffer_int16
+                # TODO: target(int32) += data[start : end](int16) * volume(float)
+
+                int32_add_int16_in_place_viper(target_buffer_np, 0, loaded_data, current_pos, num_read_samples)
 
                 total_samples_mixed = max(total_samples_mixed, num_read_samples)  
                 # Update position for this voice (in bytes)
                 voice_info.current_pos += num_read_samples
 
             # Check if this voice finished reading (reached end of loaded data)
-            if current_pos + num_read_samples >= loaded_data.size:
-                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, loaded_data.size)}")
+            if current_pos + num_read_samples >= num_data_samples:
                 voice_info.finished = True
+                # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, num_data_samples)}")
+
+        # control voice volumn
+        # I2S.shift(target_buffer_np, self.I2S_BUFFER_BIT, int(math.log(self.volume_factor)))
+        # int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13))
+        int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13 + math.log(self.volume_factor, 2)))
+        # divide_int32_array_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(1 // self.volume_factor))
 
         # Remove finished voices
         for active_voice in self.active_voices:
@@ -522,11 +515,11 @@ class AudioManager:
 
         # Write the prepared buffer to I2S if it has data
         if self.always_play or samples_to_play == self.BUFFER_SAMPLES:
-            byte_data = self.audio_bytebuffers[play_idx]
+            byte_data = self.audio_buffers[play_idx]
             self.audio_out.write(byte_data)
             write_tiggered = True
         elif samples_to_play > 0:
-            byte_data = self.audio_bytebuffers[play_idx][:samples_to_play * self.bytes_per_sample]
+            byte_data = self.audio_buffers[play_idx][:samples_to_play * 4]
             self.audio_out.write(byte_data)
             write_tiggered = True
 
@@ -591,11 +584,11 @@ class AudioManager:
 
             # Prepare the initial two buffers (in main thread)
             audio_buffer_a, audio_buffer_b = self.audio_buffers
-            audio_buffer_a -= audio_buffer_a
-            audio_buffer_b -= audio_buffer_b
+            clear_4bit_bytearray_viper(audio_buffer_a, self.BUFFER_SAMPLES)
+            clear_4bit_bytearray_viper(audio_buffer_b, self.BUFFER_SAMPLES)
             self.valid_samples[0] = self.BUFFER_SAMPLES
             self.valid_samples[1] = self.BUFFER_SAMPLES
-            byte_data_init = self.audio_bytebuffers[0]
+            byte_data_init = self.audio_buffers[0]
             self.audio_out.write(byte_data_init)
             self.buffer_to_play_idx = 1 # Next IRQ plays buffer 1
         return new_voice_id
@@ -633,8 +626,8 @@ class AudioManager:
 
             # Reset buffer state (NumPy buffers)
             audio_buffer_a, audio_buffer_b = self.audio_buffers
-            audio_buffer_a -= audio_buffer_a
-            audio_buffer_b -= audio_buffer_b
+            clear_4bit_bytearray_viper(audio_buffer_a, self.BUFFER_SAMPLES)
+            clear_4bit_bytearray_viper(audio_buffer_b, self.BUFFER_SAMPLES)
             self.valid_samples = [0, 0]
             self.buffer_to_play_idx = 0
 
@@ -715,9 +708,15 @@ def main():
 
     # Load WAV files into memory first
     print("Loading WAVs...")
-    sampler = Sampler("/wav/piano/16000")
+    sampler = Sampler("/wav/piano/16000_2s")
+    # note_cache_path: Optional[str] = "/cache/piano/16000_1.8s"
+    note_cache_path: Optional[str] = "/cache/piano/16000"
     for note in ["C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6"]:
-        audio_manager.load_wav(note, sampler.get_sample(note).tobytes())
+        if exists(f"{note_cache_path}/{note}"):
+            wav_data = open(f"{note_cache_path}/{note}", "rb").read()
+        else:
+            wav_data = sampler.get_sample(f"{note}", duration=1.8)
+        audio_manager.load_wav(note, wav_data)
     print("Loading complete.")
 
     quarter = 556
@@ -767,7 +766,7 @@ def midi_example():
     audio_manager = AudioManager(
         rate=16000,
         buffer_samples=1024,
-        ibuf=4096,
+        ibuf=8192,
         always_play=True,
         # volume_factor=0.1
     )
@@ -775,29 +774,28 @@ def midi_example():
     # Load WAV files into memory first
     print("Loading WAVs...")
     sampler = Sampler("/wav/piano/16000_2s")
-    note_cache_path: Optional[str] = "/cache/piano/16000_2s"
+    # note_cache_path: Optional[str] = "/cache/piano/16000_1.8s"
+    note_cache_path: Optional[str] = "/cache/piano/16000"
 
-    for note in ["C", "D", "E", "F", "G", "A", "A#", "B"]:
-        for i in range(2, 6):
-            if exists(f"{note_cache_path}/{note}"):
-                wav_data = open(f"{note_cache_path}/{note}", "rb").read()
+    start_time = time.ticks_us()
+    for i in range(2, 6):
+        for note in ["C", "D", "E", "F", "G", "A", "A#", "B"]:
+            if exists(f"{note_cache_path}/{note}{i}"):
+                wav_data = open(f"{note_cache_path}/{note}{i}", "rb").read()
             else:
-                wav_data = sampler.get_sample(f"{note}{i}", duration=1.8).tobytes()
+                wav_data = sampler.get_sample(f"{note}{i}", duration=1.8)
             audio_manager.load_wav(f"{note}{i}", wav_data)
-    audio_manager.load_wav("A1", sampler.get_sample("A#1", duration=1.8).tobytes())
-    audio_manager.load_wav("A#1", sampler.get_sample("A#1", duration=1.8).tobytes())
-    audio_manager.load_wav("D#3", sampler.get_sample("D#3", duration=1.8).tobytes())
-    audio_manager.load_wav("D#4", sampler.get_sample("D#4", duration=1.8).tobytes())
-    audio_manager.load_wav("C6", sampler.get_sample("C6", duration=1.8).tobytes())
-    audio_manager.load_wav("D6", sampler.get_sample("D6", duration=1.8).tobytes())
-    audio_manager.load_wav("E6", sampler.get_sample("E6", duration=1.8).tobytes())
-    audio_manager.load_wav("F6", sampler.get_sample("F6", duration=1.8).tobytes())
-    audio_manager.load_wav("D#5", sampler.get_sample("D#5", duration=1.8).tobytes())
-    audio_manager.load_wav("G#5", sampler.get_sample("G#5", duration=1.8).tobytes())
+
+    for note in ["A1", "A#1", "D#3", "D#4", "C6", "D6", "E6", "F6", "D#5", "G#5"]:  # ["C6", "D6", "E6", "F6"]:
+        if exists(f"{note_cache_path}/{note}"):
+            wav_data = open(f"{note_cache_path}/{note}", "rb").read()
+        else:
+            wav_data = sampler.get_sample(f"{note}", duration=1.8)
+        audio_manager.load_wav(note, wav_data)
+    end_time = time.ticks_us()
+    print(f"Loading complete. {time.ticks_diff(end_time, start_time)}us")
 
     gc.collect()
-
-    print("Loading complete.")
 
     midi_player = MIDIPlayer(
         file_path=file_path
@@ -859,5 +857,3 @@ def midi_example():
 if __name__ == "__main__":
     # main()
     midi_example()
-
-
