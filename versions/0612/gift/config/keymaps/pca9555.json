@@ -1,0 +1,24 @@
+{
+    "keymap": {
+        "VOLUME_MUTE": 12,
+        "INSERT": 9,
+        "PAGEUP": 5,
+        "PAGEDOWN": 4,
+        "DELETE": 8
+    },
+    "knobmap": {
+        "VOLUME_MUTE": {"VOLUME_DOWN": 14, "VOLUME_UP": 13},
+        "INSERT": {"INSERT-": 11, "INSERT+": 10},
+        "PAGEUP": {"PAGEUP-": 7, "PAGEUP+": 6},
+        "PAGEDOWN": {"PAGEDOWN-": 2, "PAGEDOWN+": 3},
+        "DELETE": {"DELETE-": 0, "DELETE+": 1}
+    },
+    "ledmap":
+    {
+        "AUDIO_CALL": 0,
+        "INSERT": 67,
+        "PAGEUP": 68,
+        "PAGEDOWN": 69,
+        "DELETE": 70
+    }
+}

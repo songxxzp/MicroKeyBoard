@@ -4,7 +4,7 @@
     "sda_pin": 9,
     "scl_pin": 10,
     "wakeup_pin": 11,
-    "max_keys": 81,
+    "max_keys": 80,
     "keymap_path": "/config/physical_keymap.json",
     "ltype": "neopixel",
     "led_pixels": 46,
@@ -16,6 +16,6 @@
         "sck_pin": 40,
         "ws_pin": 41,
         "sd_pin": 39,
-        "en_pin": 42
+        "en_pin": 38
     }
 }

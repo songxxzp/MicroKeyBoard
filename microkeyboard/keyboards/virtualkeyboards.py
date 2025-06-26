@@ -214,9 +214,9 @@ class VirtualKeyBoard:
                 virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function, layer_id=layer_id)
                 virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function, layer_id=layer_id)
 
-    def scan(self, activate: bool = False):
+    def scan(self, activate: bool = False) -> bool:
         if not self.phsical_key_board.scan(activate=activate):
-            return
+            return False
 
         self.keystates.clear()
         self.pressed_keys.clear()
@@ -224,7 +224,7 @@ class VirtualKeyBoard:
         for virtual_key in virtual_keys:
             if virtual_key.pressed and virtual_key.keycode is not None:
                 self.pressed_keys.append(virtual_key)
-                # self.keystates.append(virtual_key.keycode)
+
         self.pressed_keys.sort(key=lambda k:k.press_time, reverse=True)
         self.keystates = [k.keycode for k in self.pressed_keys[:6]]  # TODO: Don't use list.
         if self.keystates != self.prev_keystates:
@@ -234,6 +234,7 @@ class VirtualKeyBoard:
                 print(self.keystates)
             if self.interface is not None:
                 self.interface.send_keys(self.keystates)
+        return True
 
 
 class MusicKeyBoard(VirtualKeyBoard):
