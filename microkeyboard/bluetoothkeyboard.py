@@ -58,7 +58,6 @@ class BluetoothKeyboard(object):
                 uuid_bytes = struct.pack('<H', uuid)
                 svc_part = struct.pack('BB', 1 + len(uuid_bytes), 0x03) + uuid_bytes
                 parts.append(svc_part)
-                break
         if name:
             encoded_name = name.encode('utf-8')
             name_header = struct.pack('BB', 1 + len(encoded_name), 0x09)
@@ -164,19 +163,22 @@ class BluetoothKeyboard(object):
             else:
                 print("  Write was to a different handle.")
         elif event == IRQ_GATTS_READ_REQUEST:
+            # TODO
             conn_handle_read, attr_handle = data
             print(f"_IRQ_GATTS_READ_REQUEST: conn={conn_handle_read}, handle={attr_handle}")
-            return None
+            return 0
         elif event == IRQ_ENCRYPTION_UPDATE:
             conn_handle_enc, encrypted, authenticated, bonded_status, key_size = data
             print(f"Encryption state: encrypted={encrypted}, authenticated={authenticated}, bonded={bonded_status}")
         elif event == IRQ_GET_SECRET:
+            print("IRQ_GET_SECRET")
             sec_type, index, key = data; key = bytes(key) if key is not None else None
             if key is None: return None
             if self.paired_device_keys and (sec_type, key) in self.paired_device_keys:
                 return self.paired_device_keys[(sec_type, key)]
             return None
         elif event == IRQ_SET_SECRET:
+            print("IRQ_SET_SECRET")
             sec_type, key, value = data
             key = bytes(key) if key is not None else None
             value = bytes(value) if value is not None else None
@@ -190,6 +192,7 @@ class BluetoothKeyboard(object):
                 return True
         elif event == IRQ_MTU_EXCHANGED:
             conn_handle_mtu, mtu = data
+            self.ble.config(mtu=mtu)
             print(f"_IRQ_MTU_EXCHANGED: new MTU={mtu}")
         else:
             print(f"Unhandled event: {event}")

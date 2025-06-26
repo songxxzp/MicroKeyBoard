@@ -59,6 +59,8 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 
 | Key Combination | Function        |
 | :-------------- | :-------------- |
+| **Fn + A**      | Windows Mode    |
+| **Fn + S**      | Mac Mode        |
 | **Fn + Q**      | BLE connect     |
 | **Fn + W**      | USB connect     |
 | **Fn + E**      | Debug mode      |
@@ -74,7 +76,7 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 | **Fn + =**      | F12             |
 
 The keyboard defaults to Bluetooth mode when powered on.
-You can edit the keymap in `/config/virtual_keymaps.json`.
+You can edit the keymap in `/config/virtual_keymaps.json` or `/config/virtual_keymaps/*.json`.
 
 ## Developer Guide
 
