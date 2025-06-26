@@ -1,6 +1,7 @@
 import time
 import os
 import math
+import micropython
 
 import umidiparser
 
@@ -9,7 +10,7 @@ from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
 
 from microkeyboard.utils import debugging, exists, partial
-from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper, interpolate_int32_viper_ptr32
+from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper, interpolate_int32_viper_ptr32, interpolate_2x_int32_viper_ptr32
 
 
 def note_to_midinumber(note: str) -> int:
@@ -164,6 +165,7 @@ class Sampler:
         sample_dir : str,
         rate : int = 16000,
         volume_factor: float = 1,
+        wav_data_start: int = 78
     ):
         """
         Initialize the sampler
@@ -177,6 +179,7 @@ class Sampler:
         self.keys = []     # Store the keys (pitches) of the sample notes
         self.sample_cache = None
         self.sample_cache_name = None
+        self.wav_data_start = wav_data_start
         self.load_samples()
 
     def load_sample(self, filename, duration: Optional[float] = None) -> bytes:
@@ -189,7 +192,7 @@ class Sampler:
             # print("load_sample cache hit")
             return memoryview(bytearray(self.sample_cache) )
         with open(filepath, "rb") as f:
-            f.seek(44)  # Skip the WAV file header
+            f.seek(self.wav_data_start)  # Skip the WAV file header
             if duration is not None and duration > 0:
                 # Calculate number of samples needed
                 num_samples_to_read = int(duration * self.rate)
@@ -323,12 +326,11 @@ class AudioManager:
         bits: int = 16,
         format=I2S.MONO,
         rate=16000,
-        # ibuf: int = 8192,
         max_voices: int = 8,
         buffer_samples: int = 1024,
         i2s_buf_samples: int = 4096,
         i2s_rate: int = 32000,
-        volume_factor: float = 0.125,
+        volume_factor: float = 0.5,
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
@@ -337,10 +339,12 @@ class AudioManager:
 
         self.BUFFER_SAMPLES = buffer_samples
         self.I2S_RATE = i2s_rate
-        self.BUFFER_BYTES = self.BUFFER_SAMPLES * self.BUFFER_BIT
+        # self.BUFFER_BYTES = self.BUFFER_SAMPLES * self.BUFFER_BIT
         self.I2S_BUFFER_BYTES = self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT
 
         self.always_play = always_play
+        self.last_irq = time.ticks_ms()
+        self.last_write = time.ticks_ms()
 
         if en_pin is None:
             self.en = None
@@ -364,8 +368,10 @@ class AudioManager:
         self.rate = rate
         self.max_voices = max_voices
         self.bytes_per_sample = (self.bits // 8) * (self.format + 1)  # Should be 2
-        self.volume_factor = volume_factor  # TODO: use for es8156 or es8311 hardware volume
+
         # TODO: add software volume controll
+        self.volume_factor = volume_factor  # TODO: use for es8156 or es8311 hardware volume
+        self.volume_shift = max(int(13 + math.log(self.volume_factor, 2)), 0)
 
         # Double buffers (NumPy int16 arrays)
         self.audio_buffers = (
@@ -397,6 +403,7 @@ class AudioManager:
 
     def change_volume_factor(self, volume_factor: float):
         self.volume_factor = volume_factor
+        self.volume_shift = max(int(13 + math.log(self.volume_factor, 2)), 0)
 
     def enable_irq(self):
         self.audio_out.irq(self._i2s_callback)
@@ -404,7 +411,7 @@ class AudioManager:
     def disable_irq(self):
         self.audio_out.irq(None)
 
-    def load_wav(self, wav_file: str, wav_data: Optional[Union[memoryview, bytearray, bytes]] = None):
+    def load_wav(self, wav_file: str, wav_data: Optional[Union[memoryview, bytearray, bytes]] = None, wav_data_start: int = 44):
         """Loads WAV file data into memory cache."""
         if wav_file in self._loaded_wavs:
             print(f"'{wav_file}' already loaded.")
@@ -413,7 +420,7 @@ class AudioManager:
         if wav_data is None:
             print(f"Loading '{wav_file}'...")
             with open(wav_file, "rb") as f:
-                f.seek(44) # Skip WAV header
+                f.seek(wav_data_start)
                 wav_data = memoryview(bytearray(f.read()))  # TODO: use readinto
         loaded_np_array = memoryview(wav_data)
         self._loaded_wavs[wav_file] = loaded_np_array
@@ -469,7 +476,7 @@ class AudioManager:
             if voice_id in self.disabled_voices and self.disabled_voices[voice_id] > start_time and current_ms > self.disabled_voices[voice_id]:
                 voice_info.finished = True
                 if debugging():
-                    print(f"stopping '{voice_id}, {voice_id}' at {current_ms}.")
+                    print(f"stopping '{voice_info.voice_name}, {voice_id}' at {current_ms}.")
                 continue
 
             num_data_samples = len(loaded_data) // self.BUFFER_BIT
@@ -492,7 +499,7 @@ class AudioManager:
                 # print(f"finished reading '{voice_id}'  at {current_ms}, {(current_pos, num_read_bytes, num_data_samples)}")
 
         # control voice volumn
-        int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, int(13 + math.log(self.volume_factor, 2)))
+        int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, self.volume_shift)
 
         # Remove finished voices
         for active_voice in self.active_voices:
@@ -503,10 +510,11 @@ class AudioManager:
 
     def _i2s_callback(self, caller):
         """I2S IRQ Callback."""
+        self.last_irq = time.ticks_us()
         if not self._is_playing:
             if debugging():
                 print("I2S callback: Not playing.")
-            self.stop_all()
+            # self.stop_all()
             return
 
         play_idx = self.buffer_to_play_idx
@@ -518,16 +526,18 @@ class AudioManager:
         # Write the prepared buffer to I2S if it has data
         if self.always_play or samples_to_play == self.BUFFER_SAMPLES:
             byte_data = self.audio_buffers[play_idx]
-            interpolate_int32_viper_ptr32(byte_data, self.BUFFER_SAMPLES, self.cal_buffer, self.BUFFER_SAMPLES * self.I2S_RATE // self.rate)
+            interpolate_2x_int32_viper_ptr32(byte_data, self.cal_buffer, self.BUFFER_SAMPLES)
             self.audio_out.write(self.cal_buffer)
             # self.audio_out.write(byte_data)
             write_tiggered = True
+            self.last_write = time.ticks_us()
         elif samples_to_play > 0:
             byte_data = self.audio_buffers[play_idx][:samples_to_play * self.I2S_BUFFER_BIT]
-            interpolate_int32_viper_ptr32(byte_data, self.BUFFER_SAMPLES, self.cal_buffer, self.BUFFER_SAMPLES * self.I2S_RATE // self.rate)
+            interpolate_2x_int32_viper_ptr32(byte_data, self.cal_buffer, self.BUFFER_SAMPLES)
             self.audio_out.write(self.cal_buffer[:samples_to_play * self.I2S_BUFFER_BIT * self.I2S_RATE // self.rate])
             # self.audio_out.write(byte_data)
             write_tiggered = True
+            self.last_write = time.ticks_us()
 
         # Update state for the next IRQ
         self.buffer_to_play_idx = prep_idx
@@ -538,12 +548,16 @@ class AudioManager:
         # Stops if _is_playing is False or if all voices processed AND the buffer just played was empty
         if self.always_play:
             assert write_tiggered, "write not triggered!"
+            # micropython.schedule(self._prepare_buffer, prep_idx)
         elif not (any(voice.valid for voice in self.active_voices) > 0 or write_tiggered):
             self.stop_all()
         elif not write_tiggered:
             print(f"Nothing write to I2S, retriggering...")
             assert caller is not self, "Loop"
             self._i2s_callback(self)
+        else:
+            # micropython.schedule(self._prepare_buffer, prep_idx)
+            pass
 
     def play_note(self, wav_file: str, nickname: Optional[str] = None, playtime: Optional[int] = None) -> int:
         """Plays a note (non-blocking). Adds the WAV file data (from cache) to active voices."""
@@ -571,8 +585,9 @@ class AudioManager:
                 self.voice_num += 1
                 if playtime is not None:
                     self.disabled_voices[voice.voice_id] = time.ticks_ms() + playtime
-                print(f"starting '{voice.voice_name}' at {time.ticks_ms()}.")
                 new_voice_added = True
+                if debugging():
+                    print(f"starting '{voice.voice_name}, {voice.voice_id}' at {time.ticks_ms()}. Last irq: {self.last_irq}, last write: {self.last_write}.")
                 break
         if not new_voice_added:
             oldest_voice = self.added_voices[0]
@@ -583,6 +598,8 @@ class AudioManager:
                 new_voice_id, loaded_data, 0, nickname or wav_file, time.ticks_ms(), valid=True
             )
             new_voice_added = True
+            if debugging():
+                print(f"starting '{voice.voice_name}, {voice.voice_id}' at {time.ticks_ms()}, replace {oldest_voice.voice_name}, {oldest_voice.voice_id}. Last irq: {self.last_irq}, last write: {self.last_write}.")
 
         # If not playing, start the process
         if not self._is_playing:
@@ -706,23 +723,16 @@ class MIDIPlayer():
 
 def main(audio_manager):
     time.sleep_ms(1000) # Sleep before starting audio
-    # audio_manager = AudioManager(
-    #     sck_pin = 42,
-    #     ws_pin = 40,
-    #     sd_pin = 41,
-    #     rate=16000,
-    #     buffer_samples=512,
-    #     always_play=False
-    # )
 
     # Load WAV files into memory first
     print("Loading WAVs...")
-    sampler = Sampler("/wav/piano/16000_2s")
+    sampler = Sampler("/wav/piano/16000_2s", wav_data_start=78)
     # note_cache_path: Optional[str] = "/cache/piano/16000_1.8s"
     note_cache_path: Optional[str] = "/cache/piano/16000"
     for note in ["C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6"]:
         if exists(f"{note_cache_path}/{note}"):
-            wav_data = open(f"{note_cache_path}/{note}", "rb").read()
+            with open(f"{note_cache_path}/{note}", "rb") as f:
+                wav_data = f.read()
         else:
             wav_data = sampler.get_sample(f"{note}", duration=1.8)
         audio_manager.load_wav(note, wav_data)
@@ -774,7 +784,7 @@ def midi_example(audio_manager, file_path = "mid/fukakai - KAF - Piano.mid"):
 
     # Load WAV files into memory first
     print("Loading WAVs...")
-    sampler = Sampler("/wav/piano/16000_2s")
+    sampler = Sampler("/wav/piano/16000_2s", wav_data_start=78)
     # note_cache_path: Optional[str] = "/cache/piano/16000_1.8s"
     note_cache_path: Optional[str] = "/cache/piano/16000"
 
@@ -802,13 +812,13 @@ def midi_example(audio_manager, file_path = "mid/fukakai - KAF - Piano.mid"):
         file_path=file_path
     )
 
-    def play_note(idx: int, events: List[Tuple[int, str, bool]], audio_manager: AudioManager):
+    def play_note(idx: int, events: List[Tuple[int, str, bool]], audio_manager: AudioManager = audio_manager):
         _, note, play = events[idx]
         if play:
             audio_manager.play_note(note)
         else:
             audio_manager.stop_note(note, delay=500)
-    play_func = partial(play_note, audio_manager=audio_manager)
+    play_func = partial(play_note)
 
     count = 0
     max_scan_gap = 0
@@ -830,7 +840,8 @@ def midi_example(audio_manager, file_path = "mid/fukakai - KAF - Piano.mid"):
     for event in MidiFile(file_path, reuse_event_object=True).play():
         if event.status == umidiparser.NOTE_ON:
             note = midinumber_to_note(event.note)  # TODO: mode
-            print(note, event)
+            if debugging():
+                print(note, event)
             if event.velocity > 0:
                 # playtime = event.delta_us // 1000
                 audio_manager.play_note(note)
@@ -841,28 +852,55 @@ def midi_example(audio_manager, file_path = "mid/fukakai - KAF - Piano.mid"):
                 # time.sleep_us(event.delta_us)
         # on channel event.channel with event.velocity
         elif event.status == umidiparser.NOTE_OFF :
-            print("NOTE_OFF", event)
+            if debugging():
+                print("NOTE_OFF", event)
             note = midinumber_to_note(event.note)  # TODO: mode
             audio_manager.stop_note(note, delay=500)
             # ... stop the note event.note .
         elif event.status == umidiparser.PROGRAM_CHANGE:
-            print("PROGRAM_CHANGE", event)
+            if debugging():
+                print("PROGRAM_CHANGE", event)
             # ... change midi program to event.program on event.channel ....
         elif event.status == 0x51:
-            print("SET_TEMPO", event)
+            if debugging():
+                print("SET_TEMPO", event)
         else:
             # Show all events not processed
-            print("other event", event)
+            if debugging():
+                print("other event", event)
 
 
 if __name__ == "__main__":
+    import machine
+
+    from microkeyboard.utils import debug_switch
+    from microkeyboard.module.pca9555 import PCA9555
+
+    machine.freq(240000000)
+    
+    i2c_bus = machine.I2C(0, scl=17, sda=18, freq=400000)
+    gpio_expander = PCA9555(i2c_bus, address=0x20)
+    gpio_expander.digital_write(0, 1)
+    gpio_expander.digital_write(1, 1)
+    gpio_expander.digital_write(5, 1)
+    gpio_expander.digital_write(15, 0)
+    gpio_expander.set_pin_mode(0, 0)
+    gpio_expander.set_pin_mode(1, 0)
+    gpio_expander.set_pin_mode(5, 0)
+    gpio_expander.set_pin_mode(15, 0)
+
+    # debug_switch(True)
+
     # audio_manager = AudioManager(
     #     sck_pin = 42,
     #     ws_pin = 40,
     #     sd_pin = 41,
     #     rate=16000,
-    #     buffer_samples=512,
-    #     always_play=False
+    #     buffer_samples=1024,
+    #     i2s_rate=32000,
+    #     i2s_buf_samples=4096,
+    #     always_play=True,
+    #     volume_factor=0.5
     # )
     # main(audio_manager)
 
@@ -871,10 +909,10 @@ if __name__ == "__main__":
         ws_pin = 40,
         sd_pin = 41,
         rate=16000,
-        buffer_samples=1024,
-        i2s_rate=48000,
+        buffer_samples=512,
+        i2s_rate=32000,
         i2s_buf_samples=4096,
         always_play=True,
-        volume_factor=0.0625
+        volume_factor=0.5
     )
     midi_example(audio_manager)

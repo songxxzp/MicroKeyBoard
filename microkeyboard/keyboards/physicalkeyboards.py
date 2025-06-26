@@ -30,6 +30,7 @@ class PhysicalKeyBoard:
         
         self.virtual_keyboard = virtual_keyboard
         self.event_pending = False
+        self.last_scan_finished = True
         self.physical_keys: Optional[Union[List[PhysicalKey], Dict[int, PhysicalKey]]] = None
 
         max_keys = self.key_config.get("max_keys", None)
@@ -68,12 +69,16 @@ class PhysicalKeyBoard:
             self.physical_knobs.append(PhysicalKnob(key_a, key_b))
 
     def interrupt_handler(self, pin: Pin):
-        self.schedule_scan(False)
+        # self.schedule_scan(False)
+        if self.last_scan_finished:
+            self.last_scan_finished = False
+            micropython.schedule(self.schedule_scan, False)
     
     def schedule_scan(self, activate: bool = True):
         if not self.event_pending:
             self.event_pending = True
             self.virtual_keyboard.scan(activate=activate)
+        self.last_scan_finished = True
 
     def is_pressed(self) -> bool:
         return False
@@ -408,6 +413,8 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
             if 1 <= keycode <= 80: # Keypad Array, TODO: change id to 0-79
                 event_flag = True
                 physical_key = self.physical_keys[keycode]
+                if physical_key is None:
+                    raise AssertionError(f"physical_key is None, keycode: {keycode}")
                 physical_key.pressed = is_press
 
                 if is_press:
@@ -579,7 +586,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
                 address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config["wakeup_pin"]
                 phsical_key_board = TCA8418KeyBoard(
                     key_config=device_config,
-                    wakeup=self.bus[("int", wakeup_pin)],
+                    wakeup=self.bus.get(("int", wakeup_pin), None),
                     i2c=self.bus[("i2c", sda_pin, scl_pin)],
                     i2c_addr=int(address, 16),
                     led_manager=self.led_manager
@@ -588,7 +595,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
                 address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config["wakeup_pin"]
                 phsical_key_board = PCA9555KeyBoard(
                     key_config=device_config,
-                    wakeup=self.bus[("int", wakeup_pin)],
+                    wakeup=self.bus.get(("int", wakeup_pin), None),
                     i2c=self.bus[("i2c", sda_pin, scl_pin)],
                     i2c_addr=int(address, 16),
                     led_manager=self.led_manager
@@ -614,7 +621,10 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
     def interrupt_handler(self, pin: Pin):
         for phsical_key_board in self.phsical_key_boards:
             phsical_key_board.event_pending = True
-        self.schedule_scan(False)
+        # self.schedule_scan(False)
+        if self.last_scan_finished:
+            self.last_scan_finished = False
+            micropython.schedule(self.schedule_scan, False)
 
     def scan(self, activate: bool = True) -> bool:
         self.event_pending = False

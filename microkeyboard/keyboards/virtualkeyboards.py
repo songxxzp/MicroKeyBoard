@@ -250,7 +250,7 @@ class MusicKeyBoard(VirtualKeyBoard):
         if exists(music_mapping_path) and exists(key_config_path):
             self.music_enabled = True
             self.music_mapping_path = music_mapping_path
-            self.sampler = Sampler(note_wav_path)
+            self.sampler = Sampler(note_wav_path)  # TODO: add wav_data_start, add audio source config.
             self.music_mappings = json.load(open(self.music_mapping_path))
             self.mode = mode
             self.music_mapping = self.music_mappings[mode]
@@ -272,7 +272,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                     ws_pin=ws_pin,
                     sd_pin=sd_pin,
                     en_pin=en_pin,
-                    volume_factor=1
+                    volume_factor=0.5
                 )
 
             self.audio_manager = audio_manager

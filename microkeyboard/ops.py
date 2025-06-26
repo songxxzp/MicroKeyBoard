@@ -299,6 +299,22 @@ def interpolate_int32_viper_ptr32(
 
 
 @micropython.viper
+def interpolate_2x_int32_viper_ptr32(
+    a_ptr: ptr32,           # Pointer to the source bytearray (interpreted as int32 array)
+    result_b_ptr: ptr32,    # Pointer to the destination bytearray (interpreted as int32 array)
+    num_samples: int,     # Number of int32 samples in the source array
+):
+    # Declare loop variables with Viper integer type
+    i: int # Loop counter for source array samples
+    val: int # Current 32-bit value read from source array
+
+    for i in range(num_samples):
+        val = a_ptr[i]
+        result_b_ptr[i << 1] = val
+        result_b_ptr[(i << 1) | 1] = val
+
+
+@micropython.viper
 def int32_left_shift_in_place_viper(
     arr_ptr: ptr32,
     arr_len_samples: int,  # Number of samples in the second array
