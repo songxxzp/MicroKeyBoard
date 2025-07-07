@@ -10,7 +10,7 @@ from microkeyboard.bluetoothkeyboard import BluetoothKeyboard
 from microkeyboard.audio import Sampler, AudioManager
 from microkeyboard.keyboards.keys import VirtualKey
 from microkeyboard.keyboards.keycodes import KeyCode
-from microkeyboard.keyboards.physicalkeyboards import TCA8418KeyBoard, PCA9555KeyBoard, PhysicalKeyBoards, ShiftRegisterKeyBoard
+from microkeyboard.keyboards.physicalkeyboards import TCA8418KeyBoard, PCA9555KeyBoard, PhysicalKeyBoard, PhysicalKeyBoards, ShiftRegisterKeyBoard
 
 
 def fn_layer_pressed_function(
@@ -48,16 +48,40 @@ def fn_layer_released_function(
 
 
 class VirtualKeyBoard:
-    def __init__(self,
+
+    phsical_key_board: PhysicalKeyBoard = None
+    virtual_keys: List[VirtualKey] = None
+    
+    def __init__(
+        self,
         connection_mode: str = "bluetooth",
         mapping_path: str = "/config/virtual_keymaps.json",
-        key_config_path: str = "/config/physical_keyboard.json"
+        key_config_path: str = "/config/physical_keyboard.json",
+        user_config_path: str = "/user.json",
     ):
         # assert key_num >= self.phsical_key_board.used_key_num, "virt key num < phys key num."
+        self.user_config_path = user_config_path
+        self.mapping_path = mapping_path
+
         if exists(mapping_path):
-            self.virtual_key_mappings = json.load(open(mapping_path))
-            self.virtual_key_name = self.virtual_key_mappings.get("name", "MicroKeyBoard")
+            if mapping_path.endswith("json"):
+                self.virtual_key_mappings = json.load(open(mapping_path))
+                self.virtual_key_name = self.virtual_key_mappings.get("name", "MicroKeyBoard")
+            else:
+                if exists(user_config_path):
+                    user_config = json.load(open(user_config_path))
+                    user_system = user_config["system"]
+                else:
+                    user_system = "win"
+                if exists(f"{mapping_path}/{user_system}.json"):
+                    self.virtual_key_mappings = json.load(open(f"{mapping_path}/{user_system}.json"))
+                    self.virtual_key_name = self.virtual_key_mappings.get("name", "MicroKeyBoard")
+                else:
+                    print(f"{mapping_path}/{user_system}.json not found.")
+                    self.virtual_key_mappings = None
+                    self.virtual_key_name = "MicroKeyBoard"
         else:
+            print(f"{mapping_path} not found.")
             self.virtual_key_mappings = None
             self.virtual_key_name = "MicroKeyBoard"
         phsical_key_config = json.load(open(key_config_path))
@@ -90,8 +114,45 @@ class VirtualKeyBoard:
         self.keystates = []
         self.prev_keystates = []
 
-        self.virtual_keys: List[VirtualKey] = None
+        # self.virtual_keys: List[VirtualKey] = None
         self.build_virtual_keys()
+
+    def switch_user_system(self, user_system: str):
+        print(f"setting user_system: {user_system}")
+        assert user_system in ("mac", "win")
+        if exists(self.user_config_path):
+            user_config = json.load(open(self.user_config_path))
+            user_config["system"] = user_system
+        else:
+            user_config = {
+                "system": user_system
+            }
+
+        with open(self.user_config_path, "w") as f:
+            json.dump(user_config, f)
+
+        if exists(f"{self.mapping_path}/{user_system}.json"):
+            self.virtual_key_mappings = json.load(open(f"{self.mapping_path}/{user_system}.json"))
+            self.virtual_key_name = self.virtual_key_mappings.get("name", "MicroKeyBoard")
+        else:
+            print(f"{self.mapping_path}/{user_system}.json not found.")
+            self.virtual_key_mappings = None
+            self.virtual_key_name = "MicroKeyBoard"
+
+        self.build_virtual_keys()
+
+        # if self.connection_mode == "bluetooth":
+        #     self.ble_interface.stop()
+        #     self.ble_interface.device_name = self.virtual_key_name
+        #     self.ble_interface.start()
+
+        gc.collect()
+
+    def set_mac_mode(self):
+        self.switch_user_system("mac")
+
+    def set_win_mode(self):
+        self.switch_user_system("win")
 
     def set_connection_mode(self, connection_mode: str):
         if connection_mode == self.connection_mode:
@@ -205,6 +266,12 @@ class VirtualKeyBoard:
                         original_func()
                 virtual_key.pressed_function = partial(clear_ble_pressed_function, self, virtual_key.pressed_function)
 
+        self.bind_fn_layer_func("L", pressed_function=self.phsical_key_board.led_manager.switch)
+        self.bind_fn_layer_func("N", pressed_function=self.phsical_key_board.led_manager.next_background)
+        self.bind_fn_layer_func("P", pressed_function=debug_switch)
+        self.bind_fn_layer_func("A", pressed_function=self.set_win_mode)
+        self.bind_fn_layer_func("S", pressed_function=self.set_mac_mode)
+
     def bind_fn_layer_func(self, key_name: str, layer_id: int = 1, pressed_function: Optional[Callable] = None, released_function: Optional[Callable] = None):
         for virtual_key in self.virtual_keys:
             physical_key = virtual_key.bind_physical
@@ -214,9 +281,9 @@ class VirtualKeyBoard:
                 virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, pressed_function, virtual_key.pressed_function, layer_id=layer_id)
                 virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, released_function, virtual_key.released_function, layer_id=layer_id)
 
-    def scan(self, activate: bool = False):
-        if not self.phsical_key_board.scan(activate=activate):
-            return
+    def scan(self, activate: bool = False) -> bool:
+        if self.phsical_key_board is None or (not self.phsical_key_board.scan(activate=activate)):
+            return False
 
         self.keystates.clear()
         self.pressed_keys.clear()
@@ -224,7 +291,7 @@ class VirtualKeyBoard:
         for virtual_key in virtual_keys:
             if virtual_key.pressed and virtual_key.keycode is not None:
                 self.pressed_keys.append(virtual_key)
-                # self.keystates.append(virtual_key.keycode)
+
         self.pressed_keys.sort(key=lambda k:k.press_time, reverse=True)
         self.keystates = [k.keycode for k in self.pressed_keys[:6]]  # TODO: Don't use list.
         if self.keystates != self.prev_keystates:
@@ -234,6 +301,7 @@ class VirtualKeyBoard:
                 print(self.keystates)
             if self.interface is not None:
                 self.interface.send_keys(self.keystates)
+        return True
 
 
 class MusicKeyBoard(VirtualKeyBoard):

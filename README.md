@@ -53,6 +53,41 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 - Waveform Generator
 - ADC
 
+## Default Keymaps
+
+![Key](pictures/68.png)
+
+| Key Combination | Function        |
+| :-------------- | :-------------- |
+| **Fn + A**      | Windows Mode    |
+| **Fn + S**      | Mac Mode        |
+| **Fn + Q**      | BLE connect     |
+| **Fn + W**      | USB connect     |
+| **Fn + E**      | Debug mode      |
+| **Fn + R**      | Clear Bluetooth |
+| **Fn + L**      | RGB On / Off    |
+| **Fn + N**      | Next RGB Effect |
+| **Fn + ESC**    | PRTSC           |
+| **Fn + ~**      | ESC             |
+| **Fn + HOME**   | PAGEUP          |
+| **Fn + END**    | PAGEDOWN        |
+| **Fn + 1-10**   | F1-F10          |
+| **Fn + -**      | F11             |
+| **Fn + =**      | F12             |
+
+The keyboard defaults to Bluetooth mode when powered on.
+You can edit the keymap in `/config/virtual_keymaps.json` or `/config/virtual_keymaps/*.json`.
+
+## Developer Guide
+
+We recommend using **Thonny** ([https://thonny.org/](https://thonny.org/)) for development.
+
+To get started, connect your keyboard to your computer via **USB**. However, do not set your keyboard to USB mode, as this can conflict with USB CDC.
+
+Once connected, open Thonny and select the correct **serial port**. You can then directly edit the code on your keyboard.
+
+![Key](pictures/thonny.png)
+
 ## Versions
 
 ### 0318
@@ -65,6 +100,15 @@ Currently, it supports shift register designs. Matrix scanning keyboards are not
 - ESP32S3 + Shift Registers + USB HUB + Neopixel LEDs + ST7789 Screen + max98357; Li-ion with Chargers.
 - Piano Mode + MicroLive2D
 - BLE/USB
+
+### 0612
+- `versions/0612/gift/config`
+- ESP32S3 + TCA8418 + Neopixel LEDs
+- Li-ion with Chargers / 2-3 AAA BAT
+- BLE/USB
+- (Piano Mode + MicroLive2D)
+- (ST7789 Screen + ES8311 + SDCARD + 3.5mm Audio + Hotplug Knob)
+![Key](pictures/0612.jpg)
 
 ## Used Libs:
 Download the following libraries and place them into the `lib` folder:

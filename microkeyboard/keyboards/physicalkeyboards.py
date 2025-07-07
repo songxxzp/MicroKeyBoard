@@ -422,12 +422,14 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
                         print(f"physical({physical_key.key_id}, {physical_key.key_name}) is pressed at {time.ticks_ms()}.")
                     if physical_key.bind_virtual is not None:
                         physical_key.bind_virtual.press()
+                        self.led_manager.set_pixel(physical_key.key_name, self.led_manager.random_color())
                     else:
                         if debugging():
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for press")
                 else:
                     if physical_key.bind_virtual is not None:
                         physical_key.bind_virtual.release()
+                        self.led_manager.set_pixel(physical_key.key_name, self.led_manager.default_color())
                     else:
                         if debugging():
                             print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
@@ -439,6 +441,8 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
                 raise NotImplementedError(f"Get tca8418 keycode: {keycode}")
             tca.clear_key_int()
         self.i2c_reading = False
+        if event_flag and self.led_manager.enabled:
+            self.led_manager.write_pixels()
         return event_flag
 
     def sleep(self):
@@ -551,7 +555,6 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
 
         self.bus = {}
         self.phsical_key_boards: List[PhysicalKeyBoard] = []
-        self.led_manager = LEDManager(self.key_config)
         self.used_key_num = 0
 
         i2c_id = 0
@@ -578,6 +581,18 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
                     self.bus[bus_key] = wakeup
                     wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
             # TODO: handle wakeup
+
+        # TODO: Move to PhysicalKeyBoard?
+        ledmap = {}
+        for device_config in self.devices:
+            keymap_path = device_config.get("keymap_path", None)
+            if keymap_path is None or not exists(keymap_path):
+                continue
+            keymap_json = json.load(open(keymap_path))
+            if "ledmap" in keymap_json:
+                ledmap.update(keymap_json["ledmap"])
+
+        self.led_manager = LEDManager(self.key_config, ledmap=ledmap, bus=self.bus)
 
         for device_config in self.devices:
             device_ktype = device_config["ktype"]
