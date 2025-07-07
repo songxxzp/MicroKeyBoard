@@ -1,10 +1,22 @@
-import neopixel
 import random
 
+from neopixel import NeoPixel
 from machine import Pin
 from typing import Optional, Callable, List, Dict, Tuple, Union
 
 from microkeyboard.module.pca9555 import I2CPin, PCA9555
+
+
+class CustomNeoPixel(NeoPixel):
+    def __init__(self, pin, n, bpp=3, timing=(350, 900, 650, 600)):
+        self.pin = pin
+        self.n = n
+        self.bpp = bpp
+        self.buf = bytearray(n * bpp)
+        self.pin.init(pin.OUT)
+        # Timing arg can either be 1 for 800kHz or 0 for 400kHz,
+        # or a user-specified timing ns tuple (high_0, low_0, high_1, low_1).
+        self.timing = timing
 
 
 class LEDManager:
@@ -34,7 +46,7 @@ class LEDManager:
         self.enabled = False
         self.led_power.value(self.enabled)
 
-        self.pixels = neopixel.NeoPixel(Pin(self.led_data_pin, Pin.OUT, value=0), self.led_pixels)
+        self.pixels = CustomNeoPixel(Pin(self.led_data_pin, Pin.OUT, value=0), self.led_pixels)
         self.pixels.fill((self.onstart_light_level, self.onstart_light_level, self.onstart_light_level))
         self.pixels.write()
 
