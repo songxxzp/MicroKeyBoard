@@ -846,8 +846,22 @@ def test_inplace_divide():
         print("Some in-place division correctness checks failed. Investigate numerical differences.")
 
 
+def test_interploate_2x_ptr32():
+    import time
+    audio_buffer = memoryview(bytearray(1024 * 4 * 2))
+    cal_buffer = memoryview(bytearray(1024 * 4))
+    NUM_ITERATIONS = 100
+
+    time_start = time.ticks_us()
+    for _ in range(NUM_ITERATIONS):
+        interpolate_2x_int32_viper_ptr32(cal_buffer, audio_buffer, 1024)
+    time_end = time.ticks_us()
+    print("test_interploate_2x_ptr32 x100:", time_end - time_start, "us")
+
+
 # --- Main execution block ---
 if __name__ == "__main__":
-    test_inplace_add()
-    test_inplace_divide()
-    test_interploate()
+    test_interploate_2x_ptr32()
+    # test_inplace_add()
+    # test_inplace_divide()
+    # test_interploate()

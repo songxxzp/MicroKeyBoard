@@ -13,6 +13,7 @@ from microkeyboard.audio import AudioManager, Sampler, MIDIPlayer, midinumber_to
 from microkeyboard.utils import partial, exists, makedirs, check_disk_space, debug_switch, debugging
 from microkeyboard.keyboards.virtualkeyboards import VirtualKeyBoard, MusicKeyBoard
 from microkeyboard.keyboards.led import LEDManager
+from microkeyboard.module.pca9555 import PCA9555
 from microkeyboard.screen import ScreenManager
 
 
@@ -25,15 +26,26 @@ def main():
     )
 
     screen_manager.text_lines(["MicroKeyBoard", "Starting"])
-    virtual_key_board = VirtualKeyBoard(
-        mapping_path="/config/virtual_keymaps.json",
-        key_config_path="/config/physical_keyboard.json"
+    # virtual_key_board = VirtualKeyBoard(
+    #     mapping_path="/config/virtual_keymaps.json",
+    #     key_config_path="/config/physical_keyboard.json"
+    # )
+
+    virtual_key_board = MusicKeyBoard(
+        music_mapping_path="/config/music_keymap.json",
+        mode = "F Major"
     )
 
-    # virtual_key_board = MusicKeyBoard(
-    #     music_mapping_path="/config/music_keymap.json",
-    #     mode = "F Major"
-    # )
+    i2c_bus = virtual_key_board.phsical_key_board.bus[("i2c", 18, 17)]
+    gpio_expander = PCA9555(i2c_bus, address=0x20)
+    gpio_expander.digital_write(0, 1)
+    gpio_expander.digital_write(1, 1)
+    gpio_expander.digital_write(5, 1)
+    gpio_expander.set_pin_mode(0, 0)
+    gpio_expander.set_pin_mode(1, 0)
+    gpio_expander.set_pin_mode(5, 0)
+    # gpio_expander.digital_write(15, 0)
+    # gpio_expander.set_pin_mode(15, 0)
 
     screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
 
@@ -136,3 +148,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

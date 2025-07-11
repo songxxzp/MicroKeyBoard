@@ -315,6 +315,7 @@ class AudioManager:
     BUFFER_BYTES = BUFFER_SAMPLES * BUFFER_BIT # Calculate bytes based on samples (assuming 16-bit mono)
     I2S_BUFFER_BIT = 4
     I2S_BUFFER_BYTES = BUFFER_SAMPLES * I2S_BUFFER_BIT
+    I2S_INTERPOLATE = 2
 
     def __init__(
         self,
@@ -339,6 +340,7 @@ class AudioManager:
 
         self.BUFFER_SAMPLES = buffer_samples
         self.I2S_RATE = i2s_rate
+        self.I2S_INTERPOLATE = (i2s_rate // rate)
         # self.BUFFER_BYTES = self.BUFFER_SAMPLES * self.BUFFER_BIT
         self.I2S_BUFFER_BYTES = self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT
 
@@ -360,12 +362,12 @@ class AudioManager:
             bits=self.I2S_BUFFER_BIT * 8,  # I2S use 32 bit to prevent overflow
             format=format,
             rate=self.I2S_RATE,
-            ibuf=i2s_buf_samples * self.I2S_BUFFER_BIT * (i2s_rate // rate),
+            ibuf=i2s_buf_samples * self.I2S_BUFFER_BIT * self.I2S_INTERPOLATE,
         )
 
+        self.RATE = rate
         self.bits = bits
         self.format = format
-        self.rate = rate
         self.max_voices = max_voices
         self.bytes_per_sample = (self.bits // 8) * (self.format + 1)  # Should be 2
 
@@ -375,10 +377,11 @@ class AudioManager:
 
         # Double buffers (NumPy int16 arrays)
         self.audio_buffers = (
-            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT)),
-            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT))
+            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT * self.I2S_INTERPOLATE)),
+            memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT * self.I2S_INTERPOLATE))
         )
-        self.cal_buffer = memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT * (i2s_rate // rate)))
+        self.audio_cal_buffer = memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT))
+        # self.cal_buffer = memoryview(bytearray(self.BUFFER_SAMPLES * self.I2S_BUFFER_BIT * self.I2S_INTERPOLATE))
 
         # Valid samples mixed into each buffer
         self.valid_samples = [0, 0]
@@ -434,7 +437,7 @@ class AudioManager:
 
     def _prepare_buffer(self, buffer_idx: int):
         """Mixes active voices (from memory) using NumPy."""
-        target_buffer_np = self.audio_buffers[buffer_idx]
+        target_buffer_np = self.audio_cal_buffer  # self.audio_buffers[buffer_idx]
         clear_4bit_bytearray_viper(target_buffer_np, self.BUFFER_SAMPLES)
 
         total_samples_mixed = 0
@@ -501,6 +504,9 @@ class AudioManager:
         # control voice volumn
         int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, self.volume_shift)
 
+        # interpolate_2x
+        interpolate_2x_int32_viper_ptr32(target_buffer_np, self.audio_buffers[buffer_idx], self.BUFFER_SAMPLES)
+
         # Remove finished voices
         for active_voice in self.active_voices:
             if active_voice.finished:
@@ -526,16 +532,16 @@ class AudioManager:
         # Write the prepared buffer to I2S if it has data
         if self.always_play or samples_to_play == self.BUFFER_SAMPLES:
             byte_data = self.audio_buffers[play_idx]
-            interpolate_2x_int32_viper_ptr32(byte_data, self.cal_buffer, self.BUFFER_SAMPLES)
-            self.audio_out.write(self.cal_buffer)
-            # self.audio_out.write(byte_data)
+            # interpolate_2x_int32_viper_ptr32(byte_data, self.cal_buffer, self.BUFFER_SAMPLES)
+            # self.audio_out.write(self.cal_buffer)
+            self.audio_out.write(byte_data)
             write_tiggered = True
             self.last_write = time.ticks_us()
         elif samples_to_play > 0:
-            byte_data = self.audio_buffers[play_idx][:samples_to_play * self.I2S_BUFFER_BIT]
-            interpolate_2x_int32_viper_ptr32(byte_data, self.cal_buffer, self.BUFFER_SAMPLES)
-            self.audio_out.write(self.cal_buffer[:samples_to_play * self.I2S_BUFFER_BIT * self.I2S_RATE // self.rate])
-            # self.audio_out.write(byte_data)
+            byte_data = self.audio_buffers[play_idx][:samples_to_play * self.I2S_BUFFER_BIT * self.I2S_INTERPOLATE]
+            # interpolate_2x_int32_viper_ptr32(byte_data, self.cal_buffer, self.BUFFER_SAMPLES)
+            # self.audio_out.write(self.cal_buffer[:samples_to_play * self.I2S_BUFFER_BIT * self.I2S_RATE // self.RATE])
+            self.audio_out.write(byte_data)
             write_tiggered = True
             self.last_write = time.ticks_us()
 
@@ -909,10 +915,10 @@ if __name__ == "__main__":
         ws_pin = 40,
         sd_pin = 41,
         rate=16000,
-        buffer_samples=512,
         i2s_rate=32000,
-        i2s_buf_samples=4096,
+        buffer_samples=1024,
+        i2s_buf_samples=2048,
         always_play=True,
-        volume_factor=0.5
+        volume_factor=0.25
     )
     midi_example(audio_manager)

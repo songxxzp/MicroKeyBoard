@@ -334,13 +334,13 @@ class MusicKeyBoard(VirtualKeyBoard):
                 audio_manager = AudioManager(
                     rate=16000,
                     buffer_samples=1024,
-                    i2s_buf_samples=4096,
+                    i2s_buf_samples=2048,
                     always_play=True,
                     sck_pin=sck_pin,
                     ws_pin=ws_pin,
                     sd_pin=sd_pin,
                     en_pin=en_pin,
-                    volume_factor=0.5
+                    volume_factor=0.25
                 )
 
             self.audio_manager = audio_manager

@@ -349,7 +349,8 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
         self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
         if wakeup is None:
             self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
-            self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+            if self.wakeup is not None:
+                self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
         else:
             self.wakeup = wakeup
 
@@ -489,7 +490,8 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
 
         if wakeup is None:
             self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
-            self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+            if self.wakeup is not None:
+                self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
         else:
             self.wakeup = wakeup
 
@@ -598,7 +600,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
             device_ktype = device_config["ktype"]
 
             if device_ktype == "tca8418":
-                address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config["wakeup_pin"]
+                address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config.get("wakeup_pin", None)
                 phsical_key_board = TCA8418KeyBoard(
                     key_config=device_config,
                     wakeup=self.bus.get(("int", wakeup_pin), None),
@@ -607,7 +609,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
                     led_manager=self.led_manager
                 )
             elif device_ktype == "pca9555":
-                address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config["wakeup_pin"]
+                address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config.get("wakeup_pin", None)
                 phsical_key_board = PCA9555KeyBoard(
                     key_config=device_config,
                     wakeup=self.bus.get(("int", wakeup_pin), None),

@@ -39,12 +39,16 @@ class LEDManager:
 
         if isinstance(self.led_power_pin, int):
             self.led_power = Pin(self.led_power_pin, Pin.OUT, value=0)
-        else:
+        elif isinstance(self.led_power_pin, dict):
             # TODO: use global i2c/bus instance
             self.led_power = I2CPin(PCA9555(bus[("i2c", self.led_power_pin["sda_pin"], self.led_power_pin["scl_pin"])], address=int(self.led_power_pin["address"], 16)),self.led_power_pin["pin"], mode=I2CPin.OUT)
+        else:
+            self.led_power = None
+            pass  # TODO
 
         self.enabled = False
-        self.led_power.value(self.enabled)
+        if self.led_power is not None:
+            self.led_power.value(self.enabled)
 
         self.pixels = CustomNeoPixel(Pin(self.led_data_pin, Pin.OUT, value=0), self.led_pixels)
         self.pixels.fill((self.onstart_light_level, self.onstart_light_level, self.onstart_light_level))
@@ -53,16 +57,19 @@ class LEDManager:
 
     def disable(self):
         self.enabled = False
-        self.led_power.value(0)
+        if self.led_power is not None:
+            self.led_power.value(0)
 
     def enable(self):
         self.enabled = True
-        self.led_power.value(1)
+        if self.led_power is not None:
+            self.led_power.value(1)
         self.write_pixels()
     
     def switch(self):
         self.enabled = not self.enabled
-        self.led_power.value(self.enabled)
+        if self.led_power is not None:
+            self.led_power.value(self.enabled)
         if self.enabled:
             self.write_pixels()
 
