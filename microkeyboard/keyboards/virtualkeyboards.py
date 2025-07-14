@@ -340,7 +340,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                     ws_pin=ws_pin,
                     sd_pin=sd_pin,
                     en_pin=en_pin,
-                    volume_factor=0.25
+                    volume_factor=-3
                 )
 
             self.audio_manager = audio_manager
@@ -387,6 +387,8 @@ class MusicKeyBoard(VirtualKeyBoard):
         super().build_fn_layer(virtual_keys)
 
         self.bind_fn_layer_func("M", pressed_function=self.enable_switch)
+        self.bind_fn_layer_func("COMMA", pressed_function=self.volume_minus)
+        self.bind_fn_layer_func("DOT", pressed_function=self.volume_plus)
 
     def build_virtual_keys(self):
         virtual_keys: List[VirtualKey] = []
@@ -418,3 +420,8 @@ class MusicKeyBoard(VirtualKeyBoard):
         self.virtual_keys = virtual_keys
         self.build_fn_layer(virtual_keys)
 
+    def volume_minus(self):
+        self.audio_manager.change_volume_factor(self.audio_manager.volume_factor - 1)
+
+    def volume_plus(self):
+        self.audio_manager.change_volume_factor(self.audio_manager.volume_factor + 1)

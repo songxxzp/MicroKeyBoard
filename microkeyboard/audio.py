@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Tuple, Callable, Union
 from umidiparser import MidiFile, MidiEvent
 
 from microkeyboard.utils import debugging, exists, partial
-from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, add_int16_array_in_place_viper, divide_int16_bytearray_in_place, divide_int16_array_in_place_viper, divide_int32_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper, interpolate_int32_viper_ptr32, interpolate_2x_int32_viper_ptr32
+from microkeyboard.ops import clear_4bit_bytearray_viper, interpolate, divide_int16_array_in_place_viper, int32_add_int16_in_place_viper, int32_left_shift_in_place_viper, interpolate_2x_int32_viper_ptr32, interpolate_4x_int32_viper_ptr32, interpolate_int32_viper_ptr32
 
 
 def note_to_midinumber(note: str) -> int:
@@ -164,7 +164,7 @@ class Sampler:
     def __init__(self,
         sample_dir : str,
         rate : int = 16000,
-        volume_factor: float = 1,
+        # volume_factor: int = 0,
         wav_data_start: int = 78
     ):
         """
@@ -174,7 +174,7 @@ class Sampler:
         """
         self.sample_dir = sample_dir
         self.rate = rate
-        self.volume_factor = volume_factor
+        # self.volume_factor = volume_factor
         self.samples = {}  # Store sample filepath
         self.keys = []     # Store the keys (pitches) of the sample notes
         self.sample_cache = None
@@ -249,8 +249,8 @@ class Sampler:
             # If the note does not exist, use pitch shifting to generate it
             sample = self.pitch_shift(note, duration=duration)
         # TODO: consider pad to length
-        if self.volume_factor > 0 and self.volume_factor != 1:
-            divide_int16_array_in_place_viper(sample, len(sample) // 2, int(1 / self.volume_factor))
+        # if self.volume_factor > 0 and self.volume_factor != 1:
+        #     divide_int16_array_in_place_viper(sample, len(sample) // 2, int(1 / self.volume_factor))
         return sample
 
     def pitch_shift(self, note, duration: Optional[float] = None):
@@ -331,7 +331,7 @@ class AudioManager:
         buffer_samples: int = 1024,
         i2s_buf_samples: int = 4096,
         i2s_rate: int = 32000,
-        volume_factor: float = 0.5,
+        volume_factor: int = -3,  # log(volume value)
         always_play: bool = False,  # Always write to buffer to trigger callback.
     ):  # TODO: read json config
         if bits != 16 or format != I2S.MONO:
@@ -373,7 +373,7 @@ class AudioManager:
 
         # TODO: add software volume controll
         self.volume_factor = volume_factor  # TODO: use for es8156 or es8311 hardware volume
-        self.volume_shift = max(int(13 + math.log(self.volume_factor, 2)), 0)
+        self.volume_shift = max(int(13 + self.volume_factor), 0)
 
         # Double buffers (NumPy int16 arrays)
         self.audio_buffers = (
@@ -404,9 +404,9 @@ class AudioManager:
         if self.always_play:
             self._i2s_callback(self)
 
-    def change_volume_factor(self, volume_factor: float):
-        self.volume_factor = volume_factor
-        self.volume_shift = max(int(13 + math.log(self.volume_factor, 2)), 0)
+    def change_volume_factor(self, volume_factor: int):
+        self.volume_factor = min(max(volume_factor, -13), 0)
+        self.volume_shift = max(int(13 + self.volume_factor), 0)
 
     def enable_irq(self):
         self.audio_out.irq(self._i2s_callback)
@@ -504,8 +504,13 @@ class AudioManager:
         # control voice volumn
         int32_left_shift_in_place_viper(target_buffer_np, self.BUFFER_SAMPLES, self.volume_shift)
 
-        # interpolate_2x
-        interpolate_2x_int32_viper_ptr32(target_buffer_np, self.audio_buffers[buffer_idx], self.BUFFER_SAMPLES)
+        # interpolate
+        if self.I2S_INTERPOLATE == 2:
+            interpolate_2x_int32_viper_ptr32(target_buffer_np, self.audio_buffers[buffer_idx], self.BUFFER_SAMPLES)
+        elif self.I2S_INTERPOLATE == 4:
+            interpolate_4x_int32_viper_ptr32(target_buffer_np, self.audio_buffers[buffer_idx], self.BUFFER_SAMPLES)
+        else:
+            interpolate_int32_viper_ptr32(target_buffer_np, self.audio_buffers[buffer_idx], self.BUFFER_SAMPLES, self.I2S_INTERPOLATE)
 
         # Remove finished voices
         for active_voice in self.active_voices:
@@ -906,7 +911,7 @@ if __name__ == "__main__":
     #     i2s_rate=32000,
     #     i2s_buf_samples=4096,
     #     always_play=True,
-    #     volume_factor=0.5
+    #     volume_factor=-1
     # )
     # main(audio_manager)
 
@@ -919,6 +924,6 @@ if __name__ == "__main__":
         buffer_samples=1024,
         i2s_buf_samples=2048,
         always_play=True,
-        volume_factor=0.25
+        volume_factor=-3
     )
     midi_example(audio_manager)

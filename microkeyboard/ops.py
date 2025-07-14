@@ -260,9 +260,9 @@ def int32_add_int16_in_place_viper(
 @micropython.viper
 def interpolate_int32_viper_ptr32(
     a_ptr: ptr32,           # Pointer to the source bytearray (interpreted as int32 array)
-    a_num_samples: int,     # Number of int32 samples in the source array
     result_b_ptr: ptr32,    # Pointer to the destination bytearray (interpreted as int32 array)
-    b_num_samples: int      # Number of int32 samples in the destination array (must be a multiple of a_num_samples)
+    num_samples: int,     # Number of int32 samples in the source array
+    interpolation_factor: int      # The time of each source sample needs to be repeated
 ):
     """
     Interpolates a source int32 array (a) into a destination int32 array (result_b)
@@ -274,23 +274,19 @@ def interpolate_int32_viper_ptr32(
     Args:
         a_ptr (ptr32): Pointer to the beginning of the source bytearray's data.
                        It's assumed to contain int32 values.
-        a_num_samples (int): The number of 32-bit integers in the source array.
         result_b_ptr (ptr32): Pointer to the beginning of the destination bytearray's data.
                               It must be pre-allocated to the correct size.
-        b_num_samples (int): The number of 32-bit integers for the output array.
-                             Must be a multiple of a_num_samples.
+        num_samples (int): The number of 32-bit integers in the source array.
+        interpolation_factor (int): The time of each source sample needs to be repeated
     """
-    
-    # Calculate how many times each source sample needs to be repeated
-    interpolation_factor: int = b_num_samples // a_num_samples
-    
+
     # Declare loop variables with Viper integer type
     i: int # Loop counter for source array samples
     j: int # Loop counter for interpolation repetitions
     val: int # Current 32-bit value read from source array
     write_idx: int # Index for writing into the destination array
 
-    for i in range(a_num_samples):
+    for i in range(num_samples):
         val = a_ptr[i]
         
         for j in range(interpolation_factor):
@@ -312,6 +308,24 @@ def interpolate_2x_int32_viper_ptr32(
         val = a_ptr[i]
         result_b_ptr[i << 1] = val
         result_b_ptr[(i << 1) | 1] = val
+
+
+@micropython.viper
+def interpolate_4x_int32_viper_ptr32(
+    a_ptr: ptr32,           # Pointer to the source bytearray (interpreted as int32 array)
+    result_b_ptr: ptr32,    # Pointer to the destination bytearray (interpreted as int32 array)
+    num_samples: int,     # Number of int32 samples in the source array
+):
+    # Declare loop variables with Viper integer type
+    i: int # Loop counter for source array samples
+    val: int # Current 32-bit value read from source array
+
+    for i in range(num_samples):
+        val = a_ptr[i]
+        result_b_ptr[i << 2] = val
+        result_b_ptr[(i << 2) | 1] = val
+        result_b_ptr[(i << 2) | 2] = val
+        result_b_ptr[(i << 2) | 3] = val
 
 
 @micropython.viper
@@ -436,6 +450,10 @@ def divide_int16_bytearray_in_place(
         arr_len_samples,
         divisor_b
     )
+
+
+
+# TODO: move tests to op tests.
 
 
 def test_interploate():

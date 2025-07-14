@@ -1,0 +1,33 @@
+{
+    "ktype": "mixture",
+    "devices": [
+        {
+            "ktype": "tca8418",
+            "scan_mode": "I2C",
+            "address": "0x34",
+            "sda_pin": 18,
+            "scl_pin": 17,
+            "max_keys": 81,
+            "keymap_path": "/config/keymaps/tca8418.json"
+        },
+        {
+            "ktype": "pca9555",
+            "scan_mode": "I2C",
+            "address": "0x27",
+            "sda_pin": 18,
+            "scl_pin": 17,
+            "max_keys": 16,
+            "keymap_path": "/config/keymaps/pca9555.json"
+        }
+    ],
+    "ltype": "neopixel",
+    "led_pixels": 71,
+    "max_light_level": 32,
+    "onstart_light_level": 1,
+    "led_data_pin": 10,
+    "i2s": {
+        "sck_pin": 42,
+        "ws_pin": 40,
+        "sd_pin": 41
+    }
+}

@@ -310,6 +310,10 @@ class ShiftRegisterKeyBoard(PhysicalKeyBoard):
                                     print(f"physical({physical_key.key_id}, {physical_key.key_name}) not bind for release")
 
         self._previous_buffer, self._current_buffer = self._current_buffer, self._previous_buffer
+
+        if scan_change and self.led_manager.enabled:
+            self.led_manager.write_pixels()
+
         return scan_change
 
     def is_pressed(self) -> bool:
@@ -495,7 +499,8 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
         else:
             self.wakeup = wakeup
 
-        self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.pca.interrupt_handler)
+        if self.wakeup is not None:
+            self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.pca.interrupt_handler)
 
         # set pin mode
         for _, key_id in self.keymap_dict.items():
