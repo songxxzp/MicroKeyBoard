@@ -4,6 +4,7 @@ from neopixel import NeoPixel
 from machine import Pin
 from typing import Optional, Callable, List, Dict, Tuple, Union
 
+from microkeyboard.devices import GLOBAL_DEIVCE_MANAGER
 from microkeyboard.module.pca9555 import I2CPin, PCA9555
 
 
@@ -40,8 +41,15 @@ class LEDManager:
         if isinstance(self.led_power_pin, int):
             self.led_power = Pin(self.led_power_pin, Pin.OUT, value=0)
         elif isinstance(self.led_power_pin, dict):
-            # TODO: use global i2c/bus instance
-            self.led_power = I2CPin(PCA9555(bus[("i2c", self.led_power_pin["sda_pin"], self.led_power_pin["scl_pin"])], address=int(self.led_power_pin["address"], 16)),self.led_power_pin["pin"], mode=I2CPin.OUT)
+            if "device" in self.led_power_pin:
+                ex_gpio_device = GLOBAL_DEIVCE_MANAGER.get_device(self.led_power_pin["device"]) 
+                self.led_power = I2CPin(ex_gpio_device, self.led_power_pin["pin"], mode=I2CPin.OUT)
+            else:  # TODO: Will be deprecated in the next major update
+                self.led_power = I2CPin(
+                    PCA9555(bus[("i2c", self.led_power_pin["sda_pin"], self.led_power_pin["scl_pin"])], address=int(self.led_power_pin["address"], 16)),
+                    self.led_power_pin["pin"],
+                    mode=I2CPin.OUT
+                )
         else:
             self.led_power = None
             pass  # TODO

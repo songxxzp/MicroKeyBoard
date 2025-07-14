@@ -6,6 +6,7 @@ import micropython
 from machine import Pin, I2S, SPI, SoftSPI, I2C
 from typing import Optional, Callable, List, Dict, Tuple, Union, Iterator
 
+from microkeyboard.devices import GLOBAL_DEIVCE_MANAGER
 from microkeyboard.pins import IRQPin
 from microkeyboard.utils import debugging, debug_switch, partial, exists, makedirs
 from microkeyboard.keyboards.keys import AbstractKey, PhysicalKey, VirtualKey, PhysicalKnob
@@ -349,16 +350,29 @@ class TCA8418KeyBoard(PhysicalKeyBoard):
         self.event_pending = False
         self.i2c_reading = False
 
-        self.tca_addr = i2c_addr or int(self.key_config.get("address", "0x34"), 16)
-        self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
-        if wakeup is None:
-            self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
-            if self.wakeup is not None:
-                self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
-        else:
-            self.wakeup = wakeup
+        if "kdeivce" in self.key_config:
+            self.tca = GLOBAL_DEIVCE_MANAGER.get_device(self.key_config["kdeivce"])
+            if wakeup is None:
+                if "ideivce" in self.key_config:
+                    self.wakeup = GLOBAL_DEIVCE_MANAGER.get_device(self.key_config["ideivce"])
+                    self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+                else:
+                    self.wakeup = None
+            else:
+                self.wakeup = wakeup
+        else:  # TODO: Will be deprecated in the next major update
+            tca_addr = i2c_addr or int(self.key_config.get("address", "0x34"), 16)
+            i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
+            self.tca = TCA8418(i2c, tca_addr)
 
-        self.tca = TCA8418(self.i2c, self.tca_addr)
+            if wakeup is None:
+                self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+                if self.wakeup is not None:
+                    self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+            else:
+                self.wakeup = wakeup
+
+        # INIT TCA8418
         ROW_PINS = [TCA8418.R0, TCA8418.R1, TCA8418.R2, TCA8418.R3, TCA8418.R4, TCA8418.R5, TCA8418.R6, TCA8418.R7] # Pins 0-7
         COL_PINS = [TCA8418.C0, TCA8418.C1, TCA8418.C2, TCA8418.C3, TCA8418.C4, TCA8418.C5, TCA8418.C6, TCA8418.C7, TCA8418.C8, TCA8418.C9] # Pins 8-17
 
@@ -488,19 +502,28 @@ class PCA9555KeyBoard(PhysicalKeyBoard):
 
         self.event_pending = False
 
-        self.pca_addr = i2c_addr or int(self.key_config.get("address", "0x20"), 16)
-        self.i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
-        self.pca = PCA9555(self.i2c, address=self.pca_addr)
 
-        if wakeup is None:
-            self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
-            if self.wakeup is not None:
-                self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
-        else:
-            self.wakeup = wakeup
+        if "kdeivce" in self.key_config:
+            self.pca = GLOBAL_DEIVCE_MANAGER.get_device(self.key_config["kdeivce"])
+            if wakeup is None:
+                if "ideivce" in self.key_config:
+                    self.wakeup = GLOBAL_DEIVCE_MANAGER.get_device(self.key_config["ideivce"])
+                    self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+                else:
+                    self.wakeup = None
+            else:
+                self.wakeup = wakeup
+        else:  # TODO: Will be deprecated in the next major update
+            pca_addr = i2c_addr or int(self.key_config.get("address", "0x20"), 16)
+            i2c = i2c or I2C(0, scl=machine.Pin(scl_pin), sda=machine.Pin(sda_pin), freq=400000)
+            self.pca = PCA9555(i2c, address=pca_addr)
 
-        if self.wakeup is not None:
-            self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.pca.interrupt_handler)
+            if wakeup is None:
+                self.wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP) if wakeup_pin is not None else None
+                if self.wakeup is not None:
+                    self.wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
+            else:
+                self.wakeup = wakeup
 
         # set pin mode
         for _, key_id in self.keymap_dict.items():
@@ -560,34 +583,21 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
         self.ktype = self.key_config.get("ktype", None)
         self.devices = self.key_config.get("devices", [])
 
-        self.bus = {}
+        self.wakeups: Dict[str, IRQPin] = {}
         self.phsical_key_boards: List[PhysicalKeyBoard] = []
         self.used_key_num = 0
 
-        i2c_id = 0
+        if wakeup:
+            self.wakeups["default"] = wakeup
+
+        # TODO: Distinguish which int is tirggered and only scan that chip.
         for device_config in self.devices:
-            device_ktype = device_config["ktype"]
-            scan_mode = device_config["scan_mode"]
-
-            if scan_mode == "I2C":
-                sda_pin, scl_pin = device_config["sda_pin"], device_config["scl_pin"]
-                bus_key = ("i2c", sda_pin, scl_pin)
-                if bus_key not in self.bus:
-                    print(f"New bus: {bus_key}")
-                    self.bus[bus_key] = I2C(i2c_id, scl=scl_pin, sda=sda_pin, freq=400000)
-                    i2c_id += 1
-            else:
-                raise NotImplementedError(f"Not implemented scan_mode: {scan_mode}")
-
-            if wakeup is None and "wakeup_pin" in device_config:
-                wakeup_pin = device_config["wakeup_pin"]
-                bus_key = ("int", wakeup_pin)
-                if bus_key not in self.bus:
-                    print(f"New bus: {bus_key}")
-                    wakeup = IRQPin(wakeup_pin, machine.Pin.IN, machine.Pin.PULL_UP)
-                    self.bus[bus_key] = wakeup
+            if "ideivce" in device_config:
+                wakeup_name = device_config["ideivce"]
+                if wakeup_name not in self.wakeups:
+                    wakeup = GLOBAL_DEIVCE_MANAGER.get_device(wakeup_name)
                     wakeup.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.interrupt_handler)
-            # TODO: handle wakeup
+                    self.wakeups["wakeup_name"] = wakeup
 
         # TODO: Move to PhysicalKeyBoard?
         ledmap = {}
@@ -599,27 +609,23 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
             if "ledmap" in keymap_json:
                 ledmap.update(keymap_json["ledmap"])
 
-        self.led_manager = LEDManager(self.key_config, ledmap=ledmap, bus=self.bus)
+        self.led_manager = LEDManager(self.key_config, ledmap=ledmap)
 
         for device_config in self.devices:
             device_ktype = device_config["ktype"]
 
             if device_ktype == "tca8418":
-                address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config.get("wakeup_pin", None)
+                wakeup_name = device_config.get("ideivce", None)
                 phsical_key_board = TCA8418KeyBoard(
                     key_config=device_config,
-                    wakeup=self.bus.get(("int", wakeup_pin), None),
-                    i2c=self.bus[("i2c", sda_pin, scl_pin)],
-                    i2c_addr=int(address, 16),
+                    wakeup=self.wakeups.get(wakeup_name, None) if wakeup_name is not None else None,
                     led_manager=self.led_manager
                 )
             elif device_ktype == "pca9555":
-                address, sda_pin, scl_pin, wakeup_pin = device_config["address"], device_config["sda_pin"], device_config["scl_pin"], device_config.get("wakeup_pin", None)
+                wakeup_name = device_config.get("ideivce", None)
                 phsical_key_board = PCA9555KeyBoard(
                     key_config=device_config,
-                    wakeup=self.bus.get(("int", wakeup_pin), None),
-                    i2c=self.bus[("i2c", sda_pin, scl_pin)],
-                    i2c_addr=int(address, 16),
+                    wakeup=self.wakeups.get(wakeup_name, None) if wakeup_name is not None else None,
                     led_manager=self.led_manager
                 )
             else:
@@ -642,6 +648,7 @@ class PhysicalKeyBoards(PhysicalKeyBoard):
 
     def interrupt_handler(self, pin: Pin):
         for phsical_key_board in self.phsical_key_boards:
+            # TODO: Distinguish which int is tirggered and only scan that chip.
             phsical_key_board.event_pending = True
         # self.schedule_scan(False)
         if self.last_scan_finished:

@@ -9,6 +9,7 @@ import micropython
 from machine import Timer
 from typing import List, Dict, Optional, Callable, Tuple, Union
 
+from microkeyboard.devices import GLOBAL_DEIVCE_MANAGER
 from microkeyboard.audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
 from microkeyboard.utils import partial, exists, makedirs, check_disk_space, debug_switch, debugging
 from microkeyboard.keyboards.virtualkeyboards import VirtualKeyBoard, MusicKeyBoard
@@ -36,16 +37,13 @@ def main():
         mode = "F Major"
     )
 
-    i2c_bus = virtual_key_board.phsical_key_board.bus[("i2c", 18, 17)]
-    gpio_expander = PCA9555(i2c_bus, address=0x20)
+    gpio_expander = GLOBAL_DEIVCE_MANAGER.get_device("ex_gpio") 
     gpio_expander.digital_write(0, 1)
     gpio_expander.digital_write(1, 1)
     gpio_expander.digital_write(5, 1)
     gpio_expander.set_pin_mode(0, 0)
     gpio_expander.set_pin_mode(1, 0)
     gpio_expander.set_pin_mode(5, 0)
-    # gpio_expander.digital_write(15, 0)
-    # gpio_expander.set_pin_mode(15, 0)
 
     screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
 

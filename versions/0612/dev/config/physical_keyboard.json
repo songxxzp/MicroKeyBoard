@@ -3,19 +3,13 @@
     "devices": [
         {
             "ktype": "tca8418",
-            "scan_mode": "I2C",
-            "address": "0x34",
-            "sda_pin": 18,
-            "scl_pin": 17,
+            "kdeivce": "main_matrix",
             "max_keys": 81,
             "keymap_path": "/config/keymaps/tca8418.json"
         },
         {
             "ktype": "pca9555",
-            "scan_mode": "I2C",
-            "address": "0x27",
-            "sda_pin": 18,
-            "scl_pin": 17,
+            "kdeivce": "key_gpio",
             "max_keys": 16,
             "keymap_path": "/config/keymaps/pca9555.json"
         }
@@ -25,6 +19,10 @@
     "max_light_level": 32,
     "onstart_light_level": 1,
     "led_data_pin": 10,
+    "led_power_pin": {
+        "device": "ex_gpio",
+        "pin": 15
+    },
     "i2s": {
         "sck_pin": 42,
         "ws_pin": 40,
