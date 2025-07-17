@@ -37,13 +37,13 @@ def main():
         mode = "F Major"
     )
 
-    gpio_expander = GLOBAL_DEIVCE_MANAGER.get_device("ex_gpio") 
+    gpio_expander: PCA9555 = GLOBAL_DEIVCE_MANAGER.get_device("ex_gpio") 
     gpio_expander.digital_write(0, 1)
     gpio_expander.digital_write(1, 1)
-    gpio_expander.digital_write(5, 1)
     gpio_expander.set_pin_mode(0, 0)
     gpio_expander.set_pin_mode(1, 0)
-    gpio_expander.set_pin_mode(5, 0)
+
+    gpio_expander.set_pin_mode(5, 1)
 
     screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
 

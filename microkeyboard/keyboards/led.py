@@ -4,6 +4,7 @@ from neopixel import NeoPixel
 from machine import Pin
 from typing import Optional, Callable, List, Dict, Tuple, Union
 
+from microkeyboard.utils import debugging
 from microkeyboard.devices import GLOBAL_DEIVCE_MANAGER
 from microkeyboard.module.pca9555 import I2CPin, PCA9555
 
@@ -76,6 +77,8 @@ class LEDManager:
     
     def switch(self):
         self.enabled = not self.enabled
+        if debugging():
+            print(f"led switch: {self.enabled}")
         if self.led_power is not None:
             self.led_power.value(self.enabled)
         if self.enabled:
