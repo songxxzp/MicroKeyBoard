@@ -7,7 +7,6 @@
             "address": "0x34",
             "sda_pin": 9,
             "scl_pin": 10,
-            "wakeup_pin": 11,
             "max_keys": 81,
             "keymap_path": "/config/keymaps/tca8418.json"
         },
@@ -17,7 +16,6 @@
             "address": "0x24",
             "sda_pin": 9,
             "scl_pin": 10,
-            "wakeup_pin": 11,
             "max_keys": 16,
             "keymap_path": "/config/keymaps/pca9555.json"
         }

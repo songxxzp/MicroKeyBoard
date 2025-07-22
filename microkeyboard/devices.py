@@ -1,7 +1,7 @@
 import json
 import machine
 
-from typing import List, Dict
+from typing import List, Dict, Any
 from microkeyboard.utils import exists
 from microkeyboard.pins import IRQPin
 from microkeyboard.module import PCA9555, TCA8418
@@ -17,6 +17,8 @@ class DeivceManager:
     ):
         if exists(devices_config_path):
             self.devices_config = json.load(open(devices_config_path))
+        else:
+            return
         for device_config in self.devices_config["devices"]:
             if device_config["dtype"] == "I2C":  # TODO: priority
                 i2c_id, freq = device_config.get("id", 0), device_config.get("freq", 400000)  # TODO: Auto I2C ID
@@ -40,10 +42,13 @@ class DeivceManager:
                 raise NotImplementedError(f'Not implemented dtype: {device_config["dtype"]}')
             self.reg_deivce(device_config["name"], device)
 
-    def reg_deivce(self, device_name: str, device):
+    def reg_deivce(self, device_name: str, device: Any) -> None:
         self.devices[device_name] = device
 
-    def get_device(self, device_name: str):
+    def have_device(self, device_name: str) -> bool:
+        return device_name in self.devices
+
+    def get_device(self, device_name: str) -> Any:
         assert device_name in self.devices, f"{device_name} not in self.devices"
         return self.devices.get(device_name)
 
