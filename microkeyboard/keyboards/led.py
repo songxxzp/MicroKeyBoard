@@ -1,10 +1,24 @@
-import neopixel
 import random
 
+from neopixel import NeoPixel
 from machine import Pin
 from typing import Optional, Callable, List, Dict, Tuple, Union
 
+from microkeyboard.utils import debugging
+from microkeyboard.devices import GLOBAL_DEIVCE_MANAGER
 from microkeyboard.module.pca9555 import I2CPin, PCA9555
+
+
+class CustomNeoPixel(NeoPixel):
+    def __init__(self, pin, n, bpp=3, timing=(350, 900, 650, 600)):
+        self.pin = pin
+        self.n = n
+        self.bpp = bpp
+        self.buf = bytearray(n * bpp)
+        self.pin.init(pin.OUT)
+        # Timing arg can either be 1 for 800kHz or 0 for 400kHz,
+        # or a user-specified timing ns tuple (high_0, low_0, high_1, low_1).
+        self.timing = timing
 
 
 class LEDManager:
@@ -27,30 +41,46 @@ class LEDManager:
 
         if isinstance(self.led_power_pin, int):
             self.led_power = Pin(self.led_power_pin, Pin.OUT, value=0)
+        elif isinstance(self.led_power_pin, dict):
+            if "device" in self.led_power_pin:
+                ex_gpio_device = GLOBAL_DEIVCE_MANAGER.get_device(self.led_power_pin["device"]) 
+                self.led_power = I2CPin(ex_gpio_device, self.led_power_pin["pin"], mode=I2CPin.OUT)
+            else:  # TODO: Will be deprecated in the next major update
+                self.led_power = I2CPin(
+                    PCA9555(bus[("i2c", self.led_power_pin["sda_pin"], self.led_power_pin["scl_pin"])], address=int(self.led_power_pin["address"], 16)),
+                    self.led_power_pin["pin"],
+                    mode=I2CPin.OUT
+                )
         else:
-            # TODO: use global i2c/bus instance
-            self.led_power = I2CPin(PCA9555(bus[("i2c", self.led_power_pin["sda_pin"], self.led_power_pin["scl_pin"])], address=int(self.led_power_pin["address"], 16)),self.led_power_pin["pin"], mode=I2CPin.OUT)
+            self.led_power = None
+            pass  # TODO
 
         self.enabled = False
-        self.led_power.value(self.enabled)
+        if self.led_power is not None:
+            self.led_power.value(self.enabled)
 
-        self.pixels = neopixel.NeoPixel(Pin(self.led_data_pin, Pin.OUT, value=0), self.led_pixels)
+        self.pixels = CustomNeoPixel(Pin(self.led_data_pin, Pin.OUT, value=0), self.led_pixels)
         self.pixels.fill((self.onstart_light_level, self.onstart_light_level, self.onstart_light_level))
         self.pixels.write()
 
 
     def disable(self):
         self.enabled = False
-        self.led_power.value(0)
+        if self.led_power is not None:
+            self.led_power.value(0)
 
     def enable(self):
         self.enabled = True
-        self.led_power.value(1)
+        if self.led_power is not None:
+            self.led_power.value(1)
         self.write_pixels()
     
     def switch(self):
         self.enabled = not self.enabled
-        self.led_power.value(self.enabled)
+        if debugging():
+            print(f"led switch: {self.enabled}")
+        if self.led_power is not None:
+            self.led_power.value(self.enabled)
         if self.enabled:
             self.write_pixels()
 

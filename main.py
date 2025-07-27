@@ -30,9 +30,6 @@ def main():
     start_time = time.ticks_ms()
     current_time = time.ticks_ms()
 
-    # virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
-    # virtual_key_board.bind_fn_layer_func("N", pressed_function=virtual_key_board.phsical_key_board.led_manager.next_background)
-    # virtual_key_board.bind_fn_layer_func("P", pressed_function=debug_switch)
     # virtual_key_board.bind_fn_layer_func("OPEN_BRACKET", pressed_function=partial(machine.freq, 80000000))
     # virtual_key_board.bind_fn_layer_func("CLOSE_BRACKET", pressed_function=partial(machine.freq, 240000000))
 
@@ -53,16 +50,14 @@ def main():
     debug_switch(False)
     # machine.freq(80000000)
 
+    # On start LED
     virtual_key_board.phsical_key_board.led_manager.enable()
     virtual_key_board.phsical_key_board.led_manager.set_background("blank")
-
     for i in range(virtual_key_board.phsical_key_board.led_manager.led_pixels):
         virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (random.randint(0, 15), random.randint(0, 15), random.randint(0, 15)), write=True)
         time.sleep(0.02)
-        # virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 0, 0), write=True)
     time.sleep(1)
     virtual_key_board.phsical_key_board.led_manager.set_background("random")
-
     virtual_key_board.phsical_key_board.led_manager.disable()
 
     virtual_key_board.scan(activate=True)

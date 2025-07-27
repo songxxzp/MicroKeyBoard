@@ -258,6 +258,77 @@ def int32_add_int16_in_place_viper(
 
 
 @micropython.viper
+def interpolate_int32_viper_ptr32(
+    a_ptr: ptr32,           # Pointer to the source bytearray (interpreted as int32 array)
+    result_b_ptr: ptr32,    # Pointer to the destination bytearray (interpreted as int32 array)
+    num_samples: int,     # Number of int32 samples in the source array
+    interpolation_factor: int      # The time of each source sample needs to be repeated
+):
+    """
+    Interpolates a source int32 array (a) into a destination int32 array (result_b)
+    using Viper for high performance. Each element from 'a' will be repeated
+    'interpolation_factor' times in 'result_b'.
+    
+    This function operates directly on memory addresses, requiring bytearray pointers.
+    
+    Args:
+        a_ptr (ptr32): Pointer to the beginning of the source bytearray's data.
+                       It's assumed to contain int32 values.
+        result_b_ptr (ptr32): Pointer to the beginning of the destination bytearray's data.
+                              It must be pre-allocated to the correct size.
+        num_samples (int): The number of 32-bit integers in the source array.
+        interpolation_factor (int): The time of each source sample needs to be repeated
+    """
+
+    # Declare loop variables with Viper integer type
+    i: int # Loop counter for source array samples
+    j: int # Loop counter for interpolation repetitions
+    val: int # Current 32-bit value read from source array
+    write_idx: int # Index for writing into the destination array
+
+    for i in range(num_samples):
+        val = a_ptr[i]
+        
+        for j in range(interpolation_factor):
+            write_idx = i * interpolation_factor + j
+            result_b_ptr[write_idx] = val
+
+
+@micropython.viper
+def interpolate_2x_int32_viper_ptr32(
+    a_ptr: ptr32,           # Pointer to the source bytearray (interpreted as int32 array)
+    result_b_ptr: ptr32,    # Pointer to the destination bytearray (interpreted as int32 array)
+    num_samples: int,     # Number of int32 samples in the source array
+):
+    # Declare loop variables with Viper integer type
+    i: int # Loop counter for source array samples
+    val: int # Current 32-bit value read from source array
+
+    for i in range(num_samples):
+        val = a_ptr[i]
+        result_b_ptr[i << 1] = val
+        result_b_ptr[(i << 1) | 1] = val
+
+
+@micropython.viper
+def interpolate_4x_int32_viper_ptr32(
+    a_ptr: ptr32,           # Pointer to the source bytearray (interpreted as int32 array)
+    result_b_ptr: ptr32,    # Pointer to the destination bytearray (interpreted as int32 array)
+    num_samples: int,     # Number of int32 samples in the source array
+):
+    # Declare loop variables with Viper integer type
+    i: int # Loop counter for source array samples
+    val: int # Current 32-bit value read from source array
+
+    for i in range(num_samples):
+        val = a_ptr[i]
+        result_b_ptr[i << 2] = val
+        result_b_ptr[(i << 2) | 1] = val
+        result_b_ptr[(i << 2) | 2] = val
+        result_b_ptr[(i << 2) | 3] = val
+
+
+@micropython.viper
 def int32_left_shift_in_place_viper(
     arr_ptr: ptr32,
     arr_len_samples: int,  # Number of samples in the second array
@@ -379,6 +450,10 @@ def divide_int16_bytearray_in_place(
         arr_len_samples,
         divisor_b
     )
+
+
+
+# TODO: move tests to op tests.
 
 
 def test_interploate():
@@ -789,8 +864,22 @@ def test_inplace_divide():
         print("Some in-place division correctness checks failed. Investigate numerical differences.")
 
 
+def test_interploate_2x_ptr32():
+    import time
+    audio_buffer = memoryview(bytearray(1024 * 4 * 2))
+    cal_buffer = memoryview(bytearray(1024 * 4))
+    NUM_ITERATIONS = 100
+
+    time_start = time.ticks_us()
+    for _ in range(NUM_ITERATIONS):
+        interpolate_2x_int32_viper_ptr32(cal_buffer, audio_buffer, 1024)
+    time_end = time.ticks_us()
+    print("test_interploate_2x_ptr32 x100:", time_end - time_start, "us")
+
+
 # --- Main execution block ---
 if __name__ == "__main__":
-    test_inplace_add()
-    test_inplace_divide()
-    test_interploate()
+    test_interploate_2x_ptr32()
+    # test_inplace_add()
+    # test_inplace_divide()
+    # test_interploate()

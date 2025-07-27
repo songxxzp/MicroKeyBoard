@@ -9,10 +9,12 @@ import micropython
 from machine import Timer
 from typing import List, Dict, Optional, Callable, Tuple, Union
 
+from microkeyboard.devices import GLOBAL_DEIVCE_MANAGER
 from microkeyboard.audio import AudioManager, Sampler, MIDIPlayer, midinumber_to_note, note_to_midinumber
 from microkeyboard.utils import partial, exists, makedirs, check_disk_space, debug_switch, debugging
 from microkeyboard.keyboards.virtualkeyboards import VirtualKeyBoard, MusicKeyBoard
 from microkeyboard.keyboards.led import LEDManager
+from microkeyboard.module.pca9555 import PCA9555
 from microkeyboard.screen import ScreenManager
 
 
@@ -25,15 +27,23 @@ def main():
     )
 
     screen_manager.text_lines(["MicroKeyBoard", "Starting"])
-    virtual_key_board = VirtualKeyBoard(
-        mapping_path="/config/virtual_keymaps.json",
-        key_config_path="/config/physical_keyboard.json"
+    # virtual_key_board = VirtualKeyBoard(
+    #     mapping_path="/config/virtual_keymaps.json",
+    #     key_config_path="/config/physical_keyboard.json"
+    # )
+
+    virtual_key_board = MusicKeyBoard(
+        music_mapping_path="/config/music_keymap.json",
+        mode = "F Major"
     )
 
-    # virtual_key_board = MusicKeyBoard(
-    #     music_mapping_path="/config/music_keymap.json",
-    #     mode = "F Major"
-    # )
+    if GLOBAL_DEIVCE_MANAGER.have_device("ex_gpio"):
+        gpio_expander: PCA9555 = GLOBAL_DEIVCE_MANAGER.get_device("ex_gpio") 
+        gpio_expander.digital_write(0, 1)
+        gpio_expander.digital_write(1, 1)
+        gpio_expander.set_pin_mode(0, 0)
+        gpio_expander.set_pin_mode(1, 0)
+        gpio_expander.set_pin_mode(5, 1)
 
     screen_manager.text_lines(["MicroKeyBoard", "Music Mode"])
 
@@ -42,13 +52,17 @@ def main():
     start_time = time.ticks_ms()
     current_time = time.ticks_ms()
 
-    for i in range(virtual_key_board.phsical_key_board.led_manager.led_pixels):
-        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (0, 0, 0))
-        virtual_key_board.phsical_key_board.led_manager.write_pixels()
+    # On start LED
+    virtual_key_board.phsical_key_board.led_manager.enable()
+    virtual_key_board.phsical_key_board.led_manager.set_background("blank")
 
     for i in range(virtual_key_board.phsical_key_board.led_manager.led_pixels):
-        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (1, 1, 1), write=True)
-        time.sleep(0.01)
+        virtual_key_board.phsical_key_board.led_manager.set_pixel(i, (random.randint(0, 15), random.randint(0, 15), random.randint(0, 15)), write=True)
+        time.sleep(0.02)
+    time.sleep(1)
+    virtual_key_board.phsical_key_board.led_manager.set_background("random")
+
+    virtual_key_board.phsical_key_board.led_manager.disable()
 
     midi_player = MIDIPlayer(
         file_path="mid/fukakai - KAF - Treble - Piano.mid"
@@ -77,14 +91,13 @@ def main():
         midi_player.stop()
         led_manager.clear()
     virtual_key_board.bind_fn_layer_func("BACKSPACE", pressed_function=partial(stop_midi, midi_player, virtual_key_board.phsical_key_board.led_manager))
-    virtual_key_board.bind_fn_layer_func("L", pressed_function=virtual_key_board.phsical_key_board.led_manager.switch)
     virtual_key_board.bind_fn_layer_func("OPEN_BRACKET", pressed_function=partial(machine.freq, 80000000))
     virtual_key_board.bind_fn_layer_func("CLOSE_BRACKET", pressed_function=partial(machine.freq, 240000000))
     # TODO: only use for keyboard with int
     virtual_key_board.bind_fn_layer_func("DELETE", released_function=virtual_key_board.phsical_key_board.sleep)
-    virtual_key_board.bind_fn_layer_func("S", pressed_function=screen_manager.stop_animate)
-    virtual_key_board.bind_fn_layer_func("A", pressed_function=screen_manager.prepare_animate)
-    virtual_key_board.bind_fn_layer_func("D", pressed_function=screen_manager.pause_animate)
+    virtual_key_board.bind_fn_layer_func("Z", pressed_function=screen_manager.stop_animate)
+    virtual_key_board.bind_fn_layer_func("X", pressed_function=screen_manager.prepare_animate)
+    virtual_key_board.bind_fn_layer_func("C", pressed_function=screen_manager.pause_animate)
 
     virtual_key_board.bind_fn_layer_func("P", pressed_function=debug_switch)
 
@@ -101,15 +114,6 @@ def main():
             count[0] += 1
             count[1] = True
             virtual_key_board.scan(activate=True)
-        except Exception as exception:
-            t.deinit()
-            raise exception
-
-    def scan_callback(t: Timer):
-        try:
-            if count[1]:
-                count[1] = False
-                micropython.schedule(scan, t)
         except Exception as exception:
             t.deinit()
             raise exception
@@ -142,3 +146,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
