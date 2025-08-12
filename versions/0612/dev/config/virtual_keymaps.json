@@ -1,6 +1,15 @@
 {
     "name": "MicroControl2",
     "ktype": "mixture",
+    "function_registry": {
+        "music_scale_c": ["change_scale_to_c_major", null],
+        "music_scale_d": ["change_scale_to_d_major", null], 
+        "music_scale_e": ["change_scale_to_e_major", null],
+        "music_scale_f": ["change_scale_to_f_major", null],
+        "music_scale_g": ["change_scale_to_g_major", null],
+        "music_scale_a": ["change_scale_to_a_major", null],
+        "music_scale_b": ["change_scale_to_b_major", null]
+    },
     "layers": {
         "0": {
             "INSERT": "ESCAPE",
@@ -26,7 +35,17 @@
             "N9": "F9",
             "N0": "F10",
             "MINUS": "F11",
-            "EQUAL": "F12"
+            "EQUAL": "F12",
+            "SPACE": "FN2"
+        },
+        "2": {
+            "N1": "music_scale_c",
+            "N2": "music_scale_g",
+            "N3": "music_scale_d",
+            "N4": "music_scale_a",
+            "N5": "music_scale_e",
+            "N6": "music_scale_b",
+            "N7": "music_scale_f"
         }
     }
 }

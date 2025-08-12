@@ -212,10 +212,42 @@ class VirtualKeyBoard:
                 physical_key = virtual_key.bind_physical
                 layer_i_code_name = self.virtual_key_mappings["layers"][layer_id].get(physical_key.key_name, None)
                 layer_codes = (virtual_key.keycode, getattr(KeyCode, layer_i_code_name, None) if layer_i_code_name is not None else None)
-                if self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"][layer_id]:
-                    virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
-                    virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function, original_func=virtual_key.released_function, layer_id=int(layer_id))
 
+                if self.virtual_key_mappings is not None and physical_key.key_name in self.virtual_key_mappings["layers"][layer_id]:
+                    # Check if subclass wants to handle this key differently
+                    if not self._pre_process_layer_mapping(virtual_key, physical_key, int(layer_id), layer_i_code_name):
+                        # Normal keycode mapping
+                        virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, virtual_key.pressed_function, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
+                        virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, virtual_key.released_function, original_func=virtual_key.released_function, layer_id=int(layer_id))
+                    # else virtual_key.pressed_function & virtual_key.released_function is handled by self._pre_process_layer_mapping.
+
+        # Handle special keys
+        self._handle_special_keys(virtual_keys)
+
+    def _pre_process_layer_mapping(self, virtual_key: VirtualKey, physical_key, layer_id: int, layer_i_code_name: str):
+        """Override this in subclasses to handle specific layer mappings differently.
+        Return True if handled, False to use default behavior."""
+
+        if layer_i_code_name == f"FN{layer_id + 1}":  # if layer_id == 1 and layer_i_code_name == "FN2":
+            def fn_pressed_function(virtual_key_board: "VirtualKeyBoard"):
+                print("change to layer 2")
+                virtual_key_board.layer = 2
+            def fn_released_function(virtual_key_board: "VirtualKeyBoard"):
+                print("change to layer 0")
+                virtual_key_board.layer = 0  # TODO: change to last layer
+
+            layer_codes = (virtual_key.keycode, None)
+
+            virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, partial(fn_pressed_function, self), original_func=virtual_key.pressed_function, layer_id=int(layer_id))
+            virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, partial(fn_released_function, self), original_func=virtual_key.released_function, layer_id=int(layer_id))
+            # virtual_key.pressed_function = partial(fn_pressed_function, self)
+            # virtual_key.released_function = partial(fn_released_function, self)
+            return True
+        return False
+
+    def _handle_special_keys(self, virtual_keys: List[VirtualKey]):
+        """Handle special keys that need custom behavior."""
+        # Handle special keys (FN, FN2, Q, W, E, R, L, N, P, A, S)
         for virtual_key in virtual_keys:
             physical_key = virtual_key.bind_physical
             if physical_key.key_name == "FN":  # TODO: create ".py" file or build from file. Or use Function Mark in keymaps.
@@ -322,6 +354,13 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.music_mappings = json.load(open(self.music_mapping_path))
             self.mode = mode
             self.music_mapping = self.music_mappings[mode]
+
+            # Define the circle of fifths order for scale cycling
+            self.scale_order = ['C Major', 'G Major', 'D Major', 'A Major', 'E Major', 'B Major', 'F Major']
+            # Filter to only include scales that exist in the music mappings
+            self.available_scales = [scale for scale in self.scale_order if scale in self.music_mappings]
+            self.current_scale_index = self.available_scales.index(mode) if mode in self.available_scales else 0
+
             key_config = json.load(open(key_config_path))
             sck_pin, ws_pin, sd_pin, en_pin = 48, 47, 45, 38
             if "i2s" in key_config:
@@ -346,31 +385,41 @@ class MusicKeyBoard(VirtualKeyBoard):
             self.audio_manager = audio_manager
 
             self.note_key_mapping = {}
+            self.note_cache_path = note_cache_path
 
             if note_cache_path is not None and not exists(note_cache_path):
                 makedirs(note_cache_path)
-            for i, note in enumerate(sorted(list(self.music_mapping.values()), key=lambda n: n[-1])):
-                print(f"Loading {i} th note: {note}, alloc: {gc.mem_alloc()}, free: {gc.mem_free()}")
-                if note_cache_path is not None:
-                    if exists(f"{note_cache_path}/{note}"):
-                        wav_data = open(f"{note_cache_path}/{note}", "rb").read()
-                    else:
-                        wav_data = self.sampler.get_sample(note, duration=1.8)
-                        with open(f"{note_cache_path}/{note}", "wb") as f:
-                            f.write(wav_data)
-                else:
-                    wav_data = self.sampler.get_sample(note, duration=1.8)
-                self.audio_manager.load_wav(note, wav_data)
-                # micropython.mem_info()
-                gc.collect()
+            self._load_mode_notes(self.music_mapping)
         else:
             self.music_enabled = False
             self.music_mapping_path = None
             self.audio_manager = None
             self.music_mapping = {}
             self.note_key_mapping = {}
+            self.available_scales = []
+            self.current_scale_index = 0
 
+        # Setup function registry after initialization
+        self.setup_function_registry()
+        
         super().__init__(*args, key_config_path=key_config_path, **kwargs)
+
+    def _load_mode_notes(self, mapping: Dict[str, str]):
+        """Load all notes for a given mode mapping."""
+        for i, note in enumerate(sorted(list(mapping.values()), key=lambda n: n[-1])):
+            if not self.audio_manager.have_wav(note):
+                print(f"Loading {i} th note: {note}, alloc: {gc.mem_alloc()}, free: {gc.mem_free()}")
+                if self.note_cache_path is not None:
+                    if exists(f"{self.note_cache_path}/{note}"):
+                        wav_data = open(f"{self.note_cache_path}/{note}", "rb").read()
+                    else:
+                        wav_data = self.sampler.get_sample(note, duration=1.8)
+                        with open(f"{self.note_cache_path}/{note}", "wb") as f:
+                            f.write(wav_data)
+                else:
+                    wav_data = self.sampler.get_sample(note, duration=1.8)
+                self.audio_manager.load_wav(note, wav_data)
+                gc.collect()
 
     def enable_switch(self):
         if self.music_enabled:
@@ -383,22 +432,80 @@ class MusicKeyBoard(VirtualKeyBoard):
             if self.audio_manager is not None:
                 self.music_enabled = True
 
+    def _pre_process_layer_mapping(self, virtual_key: VirtualKey, physical_key, layer_id: int, layer_i_code_name: str):
+        """Handle function registry mappings for music keyboard."""
+        # Only process function registry on layer 1 (Fn layer)
+        if super()._pre_process_layer_mapping(virtual_key, physical_key, layer_id, layer_i_code_name):
+            return True
+
+        if layer_id != 2:
+            return False
+
+        # Check if this is a function call (defined in function_registry)
+        if (self.virtual_key_mappings and 'function_registry' in self.virtual_key_mappings and layer_i_code_name in self.virtual_key_mappings['function_registry']):
+            # Get the function name from the registry
+            press_func_name, release_func_name = self.virtual_key_mappings['function_registry'][layer_i_code_name]
+            # print(f"_pre_process_layer_mapping: {virtual_key.key_name}, {press_func_name}, {release_func_name}")
+            # Only handle if we have this function in our registry AND music is enabled
+            if hasattr(self, 'function_registry'):
+                layer_codes = (virtual_key.keycode, None)  # No keycode change for function calls
+                
+                press_func = self.function_registry[press_func_name] if (press_func_name and press_func_name in self.function_registry) else None
+                release_func = self.function_registry[release_func_name] if (release_func_name and release_func_name in self.function_registry) else None
+
+                virtual_key.pressed_function = partial(fn_layer_pressed_function, self, virtual_key, layer_codes, press_func, original_func=virtual_key.pressed_function, layer_id=int(layer_id))
+                virtual_key.released_function = partial(fn_layer_released_function, self, virtual_key, layer_codes, release_func, original_func=virtual_key.released_function, layer_id=int(layer_id))
+                return True  # Handled by this method
+        
+        return False  # Use default behavior
+
     def build_fn_layer(self, virtual_keys: List[VirtualKey]):
+        # Call parent build_fn_layer to handle all mappings including function registry
         super().build_fn_layer(virtual_keys)
 
+        # Add music-specific key bindings
         self.bind_fn_layer_func("M", pressed_function=self.enable_switch)
         self.bind_fn_layer_func("COMMA", pressed_function=self.volume_minus)
         self.bind_fn_layer_func("DOT", pressed_function=self.volume_plus)
 
+    def setup_function_registry(self):
+        """Setup the function registry for music-related functions."""
+        self.function_registry = {
+            "change_scale_to_c_major": lambda: self.change_scale_to("C Major"),
+            "change_scale_to_d_major": lambda: self.change_scale_to("D Major"),
+            "change_scale_to_e_major": lambda: self.change_scale_to("E Major"),
+            "change_scale_to_f_major": lambda: self.change_scale_to("F Major"),
+            "change_scale_to_g_major": lambda: self.change_scale_to("G Major"),
+            "change_scale_to_a_major": lambda: self.change_scale_to("A Major"),
+            "change_scale_to_b_major": lambda: self.change_scale_to("B Major"),
+        }
+
+    def change_scale_to(self, scale_name: str):
+        """Change to a specific scale if music is enabled."""
+        if self.music_enabled and scale_name in self.available_scales:
+            self.current_scale_index = self.available_scales.index(scale_name)
+            self.music_mapping = self.music_mappings[scale_name]
+            self.mode = scale_name
+            self._load_mode_notes(self.music_mapping)
+            self.build_virtual_keys()
+            print(f"Scale changed to: {scale_name}")
+        elif not self.music_enabled:
+            # If music is disabled, don't change scale
+            pass
+
     def build_virtual_keys(self):
         virtual_keys: List[VirtualKey] = []
+        # Clear existing note key mapping
+        self.note_key_mapping = {}
+
         for physical_key in self.phsical_key_board.key_iter():
             if physical_key is not None:
                 key_code_name = physical_key.key_name
                 if self.virtual_key_mappings is not None:
                     key_code_name = self.virtual_key_mappings["layers"]["0"].get(physical_key.key_name, None) or key_code_name
                 if physical_key.key_name in self.music_mapping:
-                    self.note_key_mapping[self.music_mapping[physical_key.key_name]] = physical_key.key_name
+                    current_note = self.music_mapping[physical_key.key_name]
+                    self.note_key_mapping[current_note] = physical_key.key_name
                     virtual_key = VirtualKey(
                         key_name=key_code_name,
                         keycode=getattr(KeyCode, key_code_name, None),
@@ -412,7 +519,7 @@ class MusicKeyBoard(VirtualKeyBoard):
                     def released_function(virtual_key: VirtualKey):
                         if hasattr(virtual_key, "playing_wav_id"):
                             self.audio_manager.stop_note(wav_id=virtual_key.playing_wav_id, delay=500)
-                    virtual_key.pressed_function = partial(pressed_function, self, virtual_key, self.music_mapping[physical_key.key_name])
+                    virtual_key.pressed_function = partial(pressed_function, self, virtual_key, current_note)
                     virtual_key.released_function = partial(released_function, virtual_key)
                 else:
                     virtual_key = VirtualKey(key_name=key_code_name, keycode=getattr(KeyCode, key_code_name, None), physical_key=physical_key)
