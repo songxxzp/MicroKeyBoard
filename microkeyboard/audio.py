@@ -414,6 +414,12 @@ class AudioManager:
     def disable_irq(self):
         self.audio_out.irq(None)
 
+    def list_wav(self) -> List[str]:
+        return list(self._loaded_wavs.keys())
+    
+    def have_wav(self, wav_file: str) -> bool:
+        return wav_file in self._loaded_wavs
+
     def load_wav(self, wav_file: str, wav_data: Optional[Union[memoryview, bytearray, bytes]] = None, wav_data_start: int = 44):
         """Loads WAV file data into memory cache."""
         if wav_file in self._loaded_wavs:

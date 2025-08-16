@@ -1,0 +1,42 @@
+{
+    "devices": [
+        {
+            "name": "main_i2c",
+            "dtype": "I2C",
+            "sda": 18,
+            "scl": 17
+        },
+        {
+            "name": "main_int",
+            "dtype": "int",
+            "pin": 9
+        },
+        {
+            "name": "ex_int",
+            "dtype": "int",
+            "pin": 11
+        },
+        {
+            "name": "ex_gpio",
+            "dtype": "pca9555",
+            "mode": "I2C",
+            "address": "0x20",
+            "i2c": "main_i2c",
+            "int": "ex_int"
+        },
+        {
+            "name": "main_matrix",
+            "dtype": "tca8418",
+            "mode": "I2C",
+            "address": "0x34",
+            "i2c": "main_i2c"
+        },
+        {
+            "name": "key_gpio",
+            "dtype": "pca9555",
+            "mode": "I2C",
+            "address": "0x27",
+            "i2c": "main_i2c"
+        }
+    ]
+}

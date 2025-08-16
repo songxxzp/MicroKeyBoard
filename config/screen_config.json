@@ -1,0 +1,12 @@
+{
+    "type": "ST7789",
+    "width": 135,
+    "height": 240,
+    "rotation": 1,
+    "sck": 1,
+    "mosi": 2,
+    "reset": 42,
+    "cs": 40,
+    "dc": 41,
+    "backlight": 39
+}
